@@ -1,6 +1,8 @@
 # Interview Agent Project
 
-一个面向实习面试准备的全链路 AI 面试助手项目。项目保留原项目的 React 前端界面，并从零构建 Java 业务后端与 Python Agent 服务。
+我的练习仓库：基于 InterviewGuide 改造的、面向实习面试准备的全链路 AI 面试助手项目。
+
+项目保留原项目的 React 前端界面，并从零构建 Java 业务后端与 Python Agent 服务。
 
 ## 目录说明
 
