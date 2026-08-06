@@ -59,6 +59,32 @@
 - 会话轮次：上层传入 `userId`、`sessionId`、`runId` 和通用 `payload`，通常不重复传 `agentId`。
 - 下层在自己的会话记录中保存 `sessionId → agentId` 绑定，并在每次运行时校验用户归属和 Agent 配置状态。
 
+### 3.4 多 Agent 并行处理
+
+当下层需要多个 Agent 并行处理时，`agentId` 仍然有效，但它只标识每个 Agent 的配置或角色。例如：
+
+```text
+orchestrator-agent
+├─ question-agent
+├─ evaluation-agent
+└─ knowledge-agent
+```
+
+上层不需要感知这些子 Agent 的内部编排。上层只调用一个编排入口；下层根据编排 Agent 的配置决定是否并行调用子 Agent。
+
+并行执行时必须额外区分：
+
+- `parentRunId`：本次编排任务的运行标识。
+- `subRunId`：每个子 Agent 的独立运行标识。
+- `agentId`：本次子运行使用的 Agent 配置。
+- `taskKey`：子任务类型，用于聚合结果和幂等。
+
+子 Agent 不应直接共享可变状态。每个子任务接收只读输入，独立生成结果，最后由编排 Agent 进行聚合；记忆写入应由统一的结果处理阶段完成，避免并行写入互相覆盖。
+
+本项目首期不实现复杂的多 Agent 自主协作，只保留该架构思想。若需要展示并行能力，优先实现有限的固定并行分支，例如同时进行“回答评分”和“知识点检索”，再由编排层合并结果。
+
+实现上可采用 Python `asyncio.gather` 处理短耗时独立任务，或使用 LangGraph 的并行分支与状态合并；长耗时任务再引入队列。无论采用哪种方式，都必须处理超时、部分失败、取消、并发上限、幂等和模型调用成本。
+
 记忆的检索范围使用组合条件，而不是拼接 ID：长期记忆按 `(agentId, userId)` 隔离，短期会话记忆按 `(agentId, userId, sessionId)` 隔离；一次运行的状态和事件按 `runId` 管理。
 
 当后续支持用户自定义 Agent 配置时，再增加独立的 `agentInstanceId` 或 `agentProfileId`。该实例仍然不应替代用户和会话标识。
