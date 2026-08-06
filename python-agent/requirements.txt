@@ -1,0 +1,38 @@
+# Python Agent domain service
+# Java owns business data; Python persists Agent memory, RAG indexes, and run data.
+
+# Web service
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# Configuration and data models
+pydantic==2.10.6
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+orjson==3.10.15
+
+# LLM and Agent
+openai==1.61.1
+langgraph==0.2.68
+langchain-openai==0.3.4
+mcp==1.2.0
+
+# HTTP and reliability
+httpx==0.28.1
+tenacity==9.0.0
+
+# Agent persistence, memory, and RAG
+sqlalchemy[asyncio]==2.0.37
+asyncpg==0.30.0
+pgvector==0.3.6
+alembic==1.14.1
+
+# RAG document processing
+pypdf==5.1.0
+python-docx==1.1.2
+
+# Logging and testing
+structlog==25.1.0
+pytest==8.3.4
+pytest-asyncio==0.25.2
+respx==0.22.0

@@ -1,0 +1,36 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Java and Gradle
+**/.gradle/
+**/build/
+*.class
+
+# Python
+**/.venv/
+**/venv/
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+.coverage
+coverage/
+
+# Node.js and frontend builds
+**/node_modules/
+**/dist/
+
+# IDE and editor files
+.idea/
+*.iml
+.vscode/
+
+# Runtime files
+*.log
+logs/
+
+# Temporary assistant workspace
+_scratch/*
+!_scratch/.gitkeep
