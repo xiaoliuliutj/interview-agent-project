@@ -71,4 +71,9 @@ app/
 
 ## 8. 后续踩坑记录
 
-暂无。发现真实问题后按“现象 → 根因 → 解决措施 → 预防约束”补充。
+### pytest-asyncio 事件循环作用域警告
+
+- 现象：测试通过，但 pytest 提示 `asyncio_default_fixture_loop_scope` 未配置。
+- 根因：当前 pytest-asyncio 版本未来会改变异步 fixture 的默认作用域。
+- 解决措施：当前测试均为同步测试，不影响结果；开始异步接口测试时增加 pytest 配置并显式设为 `function`。
+- 预防约束：引入第一条异步测试时同时创建统一 pytest 配置，避免测试行为随依赖版本变化。
