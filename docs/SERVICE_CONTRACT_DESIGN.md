@@ -28,6 +28,23 @@
 
 因此，“上层只传 `agentId`，下层自行检索记忆”是不完整的。下层至少还需要用户和会话上下文；否则会发生记忆串用、无法重试幂等、并发执行相互覆盖等问题。
 
+### 3.1 推荐的身份关系
+
+`agentId`、`userId`、`sessionId` 和 `runId` 都是独立字段，不应将一个标识编码进另一个标识中。推荐的首期关系为：一个用户可以使用多个 Agent；一个 Agent 可以服务多个用户；一个会话只绑定一个 Agent 和一个用户；一个会话可以产生多次运行。
+
+```text
+用户 userId
+  └─ 会话 sessionId
+       ├─ 绑定 Agent 定义 agentId
+       └─ 多次执行 runId
+```
+
+首期的 `agentId` 应表示可复用的 Agent 定义或配置，例如 `interview-coach-v1`，包含系统提示词、模型参数、可用 Tools / Skills、MCP 配置和可检索知识范围。它不创建“每个用户、每个会话一个 Agent”的实体。
+
+记忆的检索范围使用组合条件，而不是拼接 ID：长期记忆按 `(agentId, userId)` 隔离，短期会话记忆按 `(agentId, userId, sessionId)` 隔离；一次运行的状态和事件按 `runId` 管理。
+
+当后续支持用户自定义 Agent 配置时，再增加独立的 `agentInstanceId` 或 `agentProfileId`。该实例仍然不应替代用户和会话标识。
+
 ## 4. JSON 契约方向
 
 上下层使用统一的版本化请求信封：
