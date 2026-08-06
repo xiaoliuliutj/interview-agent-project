@@ -16,6 +16,8 @@
 
 `agentId` 只表示使用哪一种 Agent 配置，例如系统提示词、可用工具、技能集合、模型参数和 RAG 范围。它不是记忆的唯一键，也不是用户身份。
 
+如果系统永远只有一个固定 Agent，`agentId` 对外确实是冗余字段，可以由下层配置默认值；用户和会话就足以完成当前调用。为了兼顾演进能力，推荐在“创建会话”时绑定一次 Agent，后续轮次只传 `sessionId`（以及用于校验和追踪的 `userId`、`runId`），由下层根据自己的会话记录找到绑定的 Agent 配置。
+
 一次请求至少需要以下标识：
 
 | 标识 | 作用 |
@@ -39,7 +41,7 @@
        └─ 多次执行 runId
 ```
 
-首期的 `agentId` 应表示可复用的 Agent 定义或配置，例如 `interview-coach-v1`，包含系统提示词、模型参数、可用 Tools / Skills、MCP 配置和可检索知识范围。它不创建“每个用户、每个会话一个 Agent”的实体。
+首期的 `agentId` 应表示可复用的 Agent 定义或配置，例如 `interview-coach-v1`，包含系统提示词、模型参数、可用 Tools / Skills、MCP 配置和可检索知识范围。它不创建“每个用户、每个会话一个 Agent”的实体。只有在存在多个 Agent 类型、配置版本或权限范围时，才需要由上层显式选择它。
 
 ### 3.2 会话与 Agent 数量
 
@@ -50,6 +52,12 @@
 多个 Agent 协作是可扩展方案，例如由编排 Agent 调度出题 Agent、评价 Agent 和报告 Agent。若将来采用该方案，应保留一个会话级 `orchestratorAgentId`，并为每次子 Agent 执行记录独立的 `runId`、`agentId` 和父运行标识；不应让多个 Agent 无边界地共享会话状态。
 
 如果同一会话需要切换 Agent 配置，应记录切换事件，或在每次运行中显式传递 `agentId`，保证历史结果可以还原当时使用的 Agent 版本。
+
+### 3.3 首期接口建议
+
+- 创建会话：上层传入可选的 `agentId`；未传时使用下层默认 Agent。
+- 会话轮次：上层传入 `userId`、`sessionId`、`runId` 和通用 `payload`，通常不重复传 `agentId`。
+- 下层在自己的会话记录中保存 `sessionId → agentId` 绑定，并在每次运行时校验用户归属和 Agent 配置状态。
 
 记忆的检索范围使用组合条件，而不是拼接 ID：长期记忆按 `(agentId, userId)` 隔离，短期会话记忆按 `(agentId, userId, sessionId)` 隔离；一次运行的状态和事件按 `runId` 管理。
 
