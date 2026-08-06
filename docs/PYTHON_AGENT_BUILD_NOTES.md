@@ -33,7 +33,7 @@ app/
 
 ### 配置类
 
-`app/core/config.py` 中的 `Settings` 统一定义配置字段，通过环境变量或 `python-agent/.env` 读取实际值；仓库只保留 `.env.example`，不把密钥和环境差异写入代码。`get_settings()` 提供进程内缓存的配置快照。
+`app/core/config.py` 中的 `Settings` 统一定义配置字段，通过环境变量或 `python-agent/.env` 读取实际值；仓库只保留 `.env`，不把密钥和环境差异写入代码。`get_settings()` 提供进程内缓存的配置快照。
 
 ### 交互契约类
 
@@ -45,7 +45,9 @@ app/
 
 ### 大模型客户端工厂
 
-`app/core/llm.py` 中的 `LLMFactory` 只根据 `Settings` 创建 `ChatOpenAI` 客户端，不在工厂中发起模型请求。模型名称、密钥、兼容接口地址、温度、超时等从 `.env` 读取；SDK 内置重试关闭，后续统一由 `engineering/` 层处理，避免重复重试。
+`app/agent/llm/factory.py` 中的 `LLMFactory` 只根据 `Settings` 创建 `ChatOpenAI` 客户端，不在工厂中发起模型请求。模型名称、密钥、兼容接口地址、温度、超时等从 `.env` 读取；SDK 内置重试关闭，后续统一由 `engineering/` 层处理，避免重复重试。
+
+模型客户端直接服务于 Agent 构建并依赖具体模型框架，因此属于 `agent/`，不属于 `core/`。`core/` 只保留模型配置字段和通用异常；依赖方向为 `agent/llm → core`，禁止 `core` 反向依赖 Agent 实现。
 
 当前测试使用假的模型配置，只验证客户端对象创建和配置校验，不访问真实模型网络。
 
@@ -53,7 +55,7 @@ app/
 
 ## 5. 工程化考虑
 
-- 配置通过外部 `.env` 注入，敏感值不进入版本库；新增配置必须先扩展 `Settings`，再补充 `.env.example`。
+- 配置通过外部 `.env` 注入，敏感值不进入版本库；新增配置必须先扩展 `Settings`，再补充 `.env`。
 - 交互模型禁止额外字段，避免上层业务字段渗入下层契约；需要演进时通过 `apiVersion` 管理。
 - 异常映射不能吞掉原始日志；统一返回给上层的同时，后续应在日志中保留完整异常上下文。
 - `get_settings()` 的缓存适合进程启动后不变的配置；测试修改环境变量时必须清理缓存。
