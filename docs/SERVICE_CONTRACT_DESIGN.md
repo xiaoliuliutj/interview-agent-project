@@ -41,6 +41,16 @@
 
 首期的 `agentId` 应表示可复用的 Agent 定义或配置，例如 `interview-coach-v1`，包含系统提示词、模型参数、可用 Tools / Skills、MCP 配置和可检索知识范围。它不创建“每个用户、每个会话一个 Agent”的实体。
 
+### 3.2 会话与 Agent 数量
+
+用户与会话是典型的一对多关系：一个 `userId` 可以拥有多个 `sessionId`，每个会话代表一次相对独立的面试过程。
+
+首期建议一个会话绑定一个主 Agent。这个 Agent 内部可以使用多个 Tools、Skills 和 MCP 能力，但这不等于多个 Agent。这样可以保持记忆边界清晰、运行链路容易追踪，也更适合本项目的面试展示目标。
+
+多个 Agent 协作是可扩展方案，例如由编排 Agent 调度出题 Agent、评价 Agent 和报告 Agent。若将来采用该方案，应保留一个会话级 `orchestratorAgentId`，并为每次子 Agent 执行记录独立的 `runId`、`agentId` 和父运行标识；不应让多个 Agent 无边界地共享会话状态。
+
+如果同一会话需要切换 Agent 配置，应记录切换事件，或在每次运行中显式传递 `agentId`，保证历史结果可以还原当时使用的 Agent 版本。
+
 记忆的检索范围使用组合条件，而不是拼接 ID：长期记忆按 `(agentId, userId)` 隔离，短期会话记忆按 `(agentId, userId, sessionId)` 隔离；一次运行的状态和事件按 `runId` 管理。
 
 当后续支持用户自定义 Agent 配置时，再增加独立的 `agentInstanceId` 或 `agentProfileId`。该实例仍然不应替代用户和会话标识。
