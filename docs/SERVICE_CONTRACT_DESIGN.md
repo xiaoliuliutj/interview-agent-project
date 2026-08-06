@@ -85,6 +85,24 @@ orchestrator-agent
 
 实现上可采用 Python `asyncio.gather` 处理短耗时独立任务，或使用 LangGraph 的并行分支与状态合并；长耗时任务再引入队列。无论采用哪种方式，都必须处理超时、部分失败、取消、并发上限、幂等和模型调用成本。
 
+### 3.5 多用户同时使用同一个 Agent
+
+“两个用户同时使用 Agent”和“一个请求内部启动多个 Agent”是两种不同的问题。前者是服务并发，后者是 Agent 编排。
+
+两个用户可以共享同一个 `agentId`，下层为每个请求创建独立的执行上下文：
+
+```text
+user-A + session-A + run-A ─┐
+                             ├─ interview-coach-v1
+user-B + session-B + run-B ─┘
+```
+
+逻辑上不需要为每个用户创建一个新的 Agent 定义或固定线程。下层可以复用只读的 Agent 配置和模型客户端，但每个请求必须独立保存消息、工具调用、中间状态和错误信息，不能使用进程级可变会话变量。
+
+FastAPI 的异步请求处理、数据库连接池和模型客户端的并发请求能力可以支持多个用户同时调用。真实部署中还需要通过并发上限、超时、限流、连接池大小和多进程/多副本扩展控制资源。
+
+只有在 Agent 持有独占资源（例如本地模型显存、浏览器实例或特定工具会话）时，才需要额外设计 Agent 实例池或 Worker 池；这属于运行资源管理，不应改变 `agentId`、`userId` 和 `sessionId` 的业务身份关系。
+
 记忆的检索范围使用组合条件，而不是拼接 ID：长期记忆按 `(agentId, userId)` 隔离，短期会话记忆按 `(agentId, userId, sessionId)` 隔离；一次运行的状态和事件按 `runId` 管理。
 
 当后续支持用户自定义 Agent 配置时，再增加独立的 `agentInstanceId` 或 `agentProfileId`。该实例仍然不应替代用户和会话标识。
