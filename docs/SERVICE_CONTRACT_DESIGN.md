@@ -115,22 +115,13 @@ FastAPI 的异步请求处理、数据库连接池和模型客户端的并发请
   "runId": "run-20260806-0001",
   "userId": "user-001",
   "sessionId": "session-001",
-  "operation": "interview.chat",
-  "session": {
-    "status": "IN_PROGRESS",
-    "turnIndex": 2,
-    "stateVersion": 3
-  },
+  "operation": "agent.respond",
   "question": "Redis 的 RDB 和 AOF 有什么区别？",
-  "context": {
-    "currentQuestion": "Redis 的持久化方式有哪些？",
-    "jobPosition": "Java 后端开发"
-  },
   "timestamp": "2026-08-06T12:00:00Z"
 }
 ```
 
-必填字段：`apiVersion`、`requestId`、`runId`、`userId`、`sessionId`、`operation`、`session.status`、`question` 和 `timestamp`。`stateVersion` 用于上层进行并发控制；`context` 只放本次调用所需的最小业务上下文，完整历史由下层根据用户和会话标识读取。
+必填字段：`apiVersion`、`requestId`、`runId`、`userId`、`sessionId`、`operation`、`question` 和 `timestamp`。请求不携带会话上下文、历史消息或上层业务字段；下层根据 `userId + sessionId` 读取和维护自己的会话状态。
 
 ### 6.2 下层返回上层
 
@@ -140,22 +131,20 @@ FastAPI 的异步请求处理、数据库连接池和模型客户端的并发请
   "requestId": "req-20260806-0001",
   "runId": "run-20260806-0001",
   "code": 0,
-  "success": true,
+  "status": "COMPLETED",
   "userId": "user-001",
   "sessionId": "session-001",
-  "session": {
-    "status": "IN_PROGRESS",
-    "turnIndex": 3,
-    "stateVersion": 4
-  },
+  "sessionStatus": "ACTIVE",
+  "stateVersion": 4,
   "answer": "RDB 是定期生成内存快照，恢复速度较快但可能丢失最近数据；AOF 记录写命令，数据可靠性更高，但文件通常更大。",
-  "nextQuestion": "AOF 的持久化策略有哪些？",
   "error": null,
   "timestamp": "2026-08-06T12:00:04Z"
 }
 ```
 
-失败时仍返回同一结构，只改变 `code`、`success`、`session.status` 和 `error`：
+`code` 不只有成功和失败两种含义，首版约定如下：`0` 表示完成，`10001` 表示处理中，`10002` 表示部分结果，`20001` 表示请求参数错误，`30001` 表示会话不存在，`40001` 表示限流，`50001` 表示 Agent 或模型暂不可用，`50002` 表示工具执行失败。`status` 表示本次运行状态，`sessionStatus` 表示下层维护的会话状态。
+
+失败或处理中仍返回同一结构，只改变 `code`、`status`、`sessionStatus` 和 `error`：
 
 ```json
 {
@@ -163,14 +152,12 @@ FastAPI 的异步请求处理、数据库连接池和模型客户端的并发请
   "requestId": "req-20260806-0001",
   "runId": "run-20260806-0001",
   "code": 50001,
-  "success": false,
+  "status": "FAILED",
   "userId": "user-001",
   "sessionId": "session-001",
-  "session": {
-    "status": "FAILED"
-  },
+  "sessionStatus": "ACTIVE",
+  "stateVersion": 4,
   "answer": null,
-  "nextQuestion": null,
   "error": {
     "type": "AGENT_EXECUTION_FAILED",
     "message": "Agent 暂时无法完成本次处理",
@@ -180,7 +167,9 @@ FastAPI 的异步请求处理、数据库连接池和模型客户端的并发请
 }
 ```
 
-`code` 是业务结果码，不替代 HTTP 状态码；例如 HTTP 200 也可以携带业务失败结果，便于上层稳定解析异步或模型执行结果。正式实现时，Java DTO、Python Pydantic 模型和契约测试必须以本节为唯一来源。
+`code` 是业务结果码，不替代 HTTP 状态码；例如 HTTP 200 也可以携带处理中或业务失败结果，便于上层稳定解析 Agent 执行结果。正式实现时，Java DTO、Python Pydantic 模型和契约测试必须以本节为唯一来源。
+
+成功、处理中、部分结果和失败必须使用完全相同的响应字段集合，不能通过删字段或更换 JSON 层级表达状态差异。上层只根据 `code`、`status`、`sessionStatus`、`answer` 和 `error` 的值解析结果；下层不返回 `nextQuestion` 等面试业务字段。
 
 记忆的检索范围使用组合条件，而不是拼接 ID：长期记忆按 `(agentId, userId)` 隔离，短期会话记忆按 `(agentId, userId, sessionId)` 隔离；一次运行的状态和事件按 `runId` 管理。
 
