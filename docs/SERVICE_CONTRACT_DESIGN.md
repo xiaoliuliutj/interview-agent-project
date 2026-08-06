@@ -104,6 +104,84 @@ FastAPI 的异步请求处理、数据库连接池和模型客户端的并发请
 
 只有在 Agent 持有独占资源（例如本地模型显存、浏览器实例或特定工具会话）时，才需要额外设计 Agent 实例池或 Worker 池；这属于运行资源管理，不应改变 `agentId`、`userId` 和 `sessionId` 的业务身份关系。
 
+## 6. 首版上下层 JSON 交互格式
+
+### 6.1 上层请求下层
+
+```json
+{
+  "apiVersion": "v1",
+  "requestId": "req-20260806-0001",
+  "runId": "run-20260806-0001",
+  "userId": "user-001",
+  "sessionId": "session-001",
+  "operation": "interview.chat",
+  "session": {
+    "status": "IN_PROGRESS",
+    "turnIndex": 2,
+    "stateVersion": 3
+  },
+  "question": "Redis 的 RDB 和 AOF 有什么区别？",
+  "context": {
+    "currentQuestion": "Redis 的持久化方式有哪些？",
+    "jobPosition": "Java 后端开发"
+  },
+  "timestamp": "2026-08-06T12:00:00Z"
+}
+```
+
+必填字段：`apiVersion`、`requestId`、`runId`、`userId`、`sessionId`、`operation`、`session.status`、`question` 和 `timestamp`。`stateVersion` 用于上层进行并发控制；`context` 只放本次调用所需的最小业务上下文，完整历史由下层根据用户和会话标识读取。
+
+### 6.2 下层返回上层
+
+```json
+{
+  "apiVersion": "v1",
+  "requestId": "req-20260806-0001",
+  "runId": "run-20260806-0001",
+  "code": 0,
+  "success": true,
+  "userId": "user-001",
+  "sessionId": "session-001",
+  "session": {
+    "status": "IN_PROGRESS",
+    "turnIndex": 3,
+    "stateVersion": 4
+  },
+  "answer": "RDB 是定期生成内存快照，恢复速度较快但可能丢失最近数据；AOF 记录写命令，数据可靠性更高，但文件通常更大。",
+  "nextQuestion": "AOF 的持久化策略有哪些？",
+  "error": null,
+  "timestamp": "2026-08-06T12:00:04Z"
+}
+```
+
+失败时仍返回同一结构，只改变 `code`、`success`、`session.status` 和 `error`：
+
+```json
+{
+  "apiVersion": "v1",
+  "requestId": "req-20260806-0001",
+  "runId": "run-20260806-0001",
+  "code": 50001,
+  "success": false,
+  "userId": "user-001",
+  "sessionId": "session-001",
+  "session": {
+    "status": "FAILED"
+  },
+  "answer": null,
+  "nextQuestion": null,
+  "error": {
+    "type": "AGENT_EXECUTION_FAILED",
+    "message": "Agent 暂时无法完成本次处理",
+    "retryable": true
+  },
+  "timestamp": "2026-08-06T12:00:04Z"
+}
+```
+
+`code` 是业务结果码，不替代 HTTP 状态码；例如 HTTP 200 也可以携带业务失败结果，便于上层稳定解析异步或模型执行结果。正式实现时，Java DTO、Python Pydantic 模型和契约测试必须以本节为唯一来源。
+
 记忆的检索范围使用组合条件，而不是拼接 ID：长期记忆按 `(agentId, userId)` 隔离，短期会话记忆按 `(agentId, userId, sessionId)` 隔离；一次运行的状态和事件按 `runId` 管理。
 
 当后续支持用户自定义 Agent 配置时，再增加独立的 `agentInstanceId` 或 `agentProfileId`。该实例仍然不应替代用户和会话标识。
