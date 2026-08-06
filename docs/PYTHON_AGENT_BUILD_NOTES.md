@@ -49,6 +49,8 @@ app/
 
 当前测试使用假的模型配置，只验证客户端对象创建和配置校验，不访问真实模型网络。
 
+模型配置文件固定为 `python-agent/.env`，不依赖启动时的当前工作目录。支持 `openai`、`openai-compatible` 与 `custom` 三种提供方标识；其中后两者仍要求服务提供 OpenAI Chat Completions 兼容接口。
+
 ## 5. 工程化考虑
 
 - 配置通过外部 `.env` 注入，敏感值不进入版本库；新增配置必须先扩展 `Settings`，再补充 `.env.example`。
