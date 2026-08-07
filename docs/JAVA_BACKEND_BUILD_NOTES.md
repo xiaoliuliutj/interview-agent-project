@@ -55,3 +55,10 @@
 - 已使用 IntelliJ 自带 JBR 21（`D:\IdeaLij\IntelliJ IDEA 2025.3.3\jbr`）和 IDEA 内置 Maven 执行 `mvn test`，构建通过；当前还没有 Java 测试类，因此未运行任何测试用例。
 - 虚拟机部署仍应安装独立的 JDK 21 与 Maven 3.9.x 二进制发行版，不依赖 IDEA 的内置运行时。
 - PostgreSQL 初始化脚本使用 `TEXT` 保存简历、JD、问答、评价、知识库原文和排期文本；对应实体显式使用 `@Column(columnDefinition = "TEXT")`，避免 PostgreSQL 下 `@Lob` 的 OID/CLOB 校验差异。
+
+### Docker 部署边界
+
+- Java 运行镜像基于 JRE 21，额外安装 `curl` 用于容器健康检查；Spring Actuator 仅暴露 `health` 和 `info`，Compose 用 `/actuator/health` 判断 Java 是否可接收前端流量。
+- Java 的 `8080` 端口只通过 Docker 内部网络暴露，React/Nginx 使用服务名 `java-backend` 反向代理 `/api/`；虚拟机对外仅开放前端 `80` 端口。
+- Compose 等待 PostgreSQL、Redis、RabbitMQ 及 Python Agent 健康后才启动 Java，避免应用在依赖未就绪时产生启动失败或连接风暴。
+- 一键脚本位于 `scripts/start.ps1` 和 `scripts/start.sh`；真实密钥、数据库密码与字体文件均由虚拟机本地提供，不进入镜像或 Git。

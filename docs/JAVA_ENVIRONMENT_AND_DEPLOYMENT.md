@@ -41,11 +41,21 @@ Python 使用 OpenAI-compatible Chat Completions 接口，因此官方 OpenAI �
 
 ## 3. Docker Compose 部署（推荐）
 
-在项目根目录执行：
+推荐在项目根目录使用一键启动脚本（完整说明见 [DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md)）：
 
 ```powershell
-Copy-Item infrastructure\.env.example infrastructure\.env
-# 编辑 infrastructure\.env
+.\scripts\start.ps1
+```
+
+Linux 虚拟机使用：
+
+```bash
+sh scripts/start.sh
+```
+
+首次执行仅会生成 `infrastructure/.env`，必须填写模型配置和高强度密码后再次运行。也可以手工执行：
+
+```powershell
 docker compose --env-file infrastructure\.env -f infrastructure\docker-compose.yml up -d --build
 ```
 
@@ -54,12 +64,12 @@ docker compose --env-file infrastructure\.env -f infrastructure\docker-compose.y
 常用检查：
 
 ```powershell
-docker compose -f infrastructure\docker-compose.yml ps
-Invoke-WebRequest http://localhost:8000/health
-Invoke-WebRequest http://localhost:8080/actuator/health
+docker compose --env-file infrastructure\.env -f infrastructure\docker-compose.yml ps
+docker compose --env-file infrastructure\.env -f infrastructure\docker-compose.yml exec python-agent python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/health').read())"
+docker compose --env-file infrastructure\.env -f infrastructure\docker-compose.yml exec java-backend curl -fsS http://127.0.0.1:8080/actuator/health
 ```
 
-前端入口为 `http://localhost`，Java API 为 `http://localhost:8080`，Python Agent 为 `http://localhost:8000`。前端会自动生成并保存匿名 `X-User-Id`，用于未接入鉴权前的用户数据隔离；这不是生产鉴权，接入登录系统后应由网关替换该身份来源。
+前端入口为 `http://localhost`（虚拟机上则为 `http://<虚拟机IP>/`）。Java API 与 Python Agent 均仅通过 Compose 内部网络访问，不映射宿主机端口；前端 Nginx 将 `/api/` 反向代理到 Java。前端会自动生成并保存匿名 `X-User-Id`，用于未接入鉴权前的用户数据隔离；这不是生产鉴权，接入登录系统后应由网关替换该身份来源。
 
 ## 4. 本机分进程启动
 

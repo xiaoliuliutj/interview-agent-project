@@ -1,0 +1,10 @@
+target
+.mvn
+.idea
+*.iml
+.env
+.env.*
+!.env.example
+.git
+_scratch
+*.log

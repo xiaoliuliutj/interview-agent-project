@@ -13,12 +13,19 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
 
   redis:
     image: redis:7.4-alpine
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
 
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
@@ -30,6 +37,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
 
   python-agent:
     build:
@@ -40,6 +48,7 @@ services:
       MODEL_NAME: ${MODEL_NAME:?set MODEL_NAME in .env}
       MODEL_API_KEY: ${MODEL_API_KEY:?set MODEL_API_KEY in .env}
       MODEL_BASE_URL: ${MODEL_BASE_URL:-}
+      MODEL_TEMPERATURE: ${MODEL_TEMPERATURE:-0.2}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
@@ -52,8 +61,9 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
+    restart: unless-stopped
 
   java-backend:
     build:
@@ -78,20 +88,33 @@ services:
       python-agent:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/actuator/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 20
+    restart: unless-stopped
 
   frontend:
     build:
       context: ../frontend
     depends_on:
       java-backend:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "80:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
 
 volumes:
   postgres-data:

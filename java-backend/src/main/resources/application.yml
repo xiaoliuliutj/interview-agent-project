@@ -30,6 +30,16 @@ spring:
 server:
   port: ${SERVER_PORT:8080}
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
 agent:
   default-target-role: ${AGENT_DEFAULT_TARGET_ROLE:Java 后端}
   file-storage:

@@ -196,3 +196,10 @@ app/
 - 已实际发送固定连通问题并获得正确响应；随后在内存仓库中使用真实模型完成一次 `InterviewPlanner` 六阶段计划生成，以及一次 `InterviewDecisionAgent` 受约束决策。决策返回了有效动作、下一阶段和评价摘要。
 - 当前 `DATABASE_URL`、Embedding 模型及 Embedding 服务未配置，因此 PostgreSQL 持久化、真实向量索引与端到端 RAG 仍不能宣称已完成集成验证。
 - 真实模型简历评价验证已通过：返回合法分数、总结和优势列表；由于 Embedding 未配置，本次不包含 RAG 证据。
+
+### Docker 部署边界
+
+- Python 下层镜像只复制 `app/`、`config/` 和依赖清单；`.env`、测试缓存和本机代码产物由 `.dockerignore` 排除，防止模型密钥被打入镜像。
+- Compose 通过下层 `/health` 检查确认服务可用，Java 仅使用 `http://python-agent:8000` 这一容器内地址调用下层；Python 的 8000 端口不映射到虚拟机。
+- 模型和 Embedding 配置由 `infrastructure/.env` 注入。Embedding 留空时基础面试链路仍可启动，但 RAG 不会伪造检索结果。
+- 全量部署与启动命令见 `docs/DOCKER_DEPLOYMENT.md`；本机没有 Docker，容器构建和端到端启动仍需要在虚拟机上完成验收。
