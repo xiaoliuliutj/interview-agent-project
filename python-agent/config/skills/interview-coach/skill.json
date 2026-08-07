@@ -1,0 +1,7 @@
+{
+  "id": "interview-coach",
+  "name": "面试教练",
+  "description": "负责结构化模拟面试中的规划、追问和阶段推进。",
+  "enabled": true,
+  "allowedTools": ["rag.search", "session.read"]
+}

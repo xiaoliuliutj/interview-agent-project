@@ -1,0 +1,14 @@
+{
+  "maxAttempts": 3,
+  "initialBackoffMilliseconds": 200,
+  "maxBackoffMilliseconds": 2000,
+  "retryableErrors": [
+    "TimeoutError",
+    "ConnectError",
+    "ConnectionError",
+    "APIConnectionError",
+    "APITimeoutError",
+    "RateLimitError",
+    "ServiceUnavailableError"
+  ]
+}

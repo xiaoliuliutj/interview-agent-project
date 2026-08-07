@@ -1,0 +1,125 @@
+"""面试 Agent 的领域模型。"""
+
+from datetime import datetime, timezone
+from enum import StrEnum
+
+from pydantic import BaseModel, Field, model_validator
+
+from app.core.contracts import SessionStatus
+
+
+class InterviewStage(StrEnum):
+    OPENING = "OPENING"
+    PROJECT = "PROJECT"
+    FUNDAMENTAL = "FUNDAMENTAL"
+    SCENARIO = "SCENARIO"
+    CODING = "CODING"
+    SUMMARY = "SUMMARY"
+
+
+class InterviewAction(StrEnum):
+    FOLLOW_UP = "FOLLOW_UP"
+    NEXT_QUESTION = "NEXT_QUESTION"
+    NEXT_STAGE = "NEXT_STAGE"
+    END_INTERVIEW = "END_INTERVIEW"
+
+
+class Difficulty(StrEnum):
+    EASY = "EASY"
+    MEDIUM = "MEDIUM"
+    HARD = "HARD"
+
+
+class CandidateProfile(BaseModel):
+    """创建会话时一次性提供的候选人资料。"""
+
+    candidate_id: str
+    resume_id: str
+    jd_id: str | None = None
+    resume_text: str = ""
+    jd_text: str = ""
+    target_role: str
+    interview_duration_minutes: int = Field(default=40, ge=15, le=120)
+    desired_difficulty: Difficulty = Difficulty.MEDIUM
+
+
+class StagePlan(BaseModel):
+    stage: InterviewStage
+    max_primary_questions: int = Field(ge=0, le=10)
+    max_followups_per_question: int = Field(ge=0, le=3)
+    difficulty: Difficulty
+    topics: list[str] = Field(default_factory=list)
+    time_budget_minutes: int = Field(ge=0, le=60)
+
+
+class InterviewPlan(BaseModel):
+    """一次面试固定使用的规划，初始化后不在每轮重新生成。"""
+
+    candidate_summary: str
+    strategy_summary: str
+    stages: list[StagePlan]
+
+    @model_validator(mode="after")
+    def validate_stage_order(self) -> "InterviewPlan":
+        expected = list(InterviewStage)
+        actual = [item.stage for item in self.stages]
+        if actual != expected:
+            raise ValueError("面试计划必须按六个固定阶段完整配置")
+
+        stage_by_name = {item.stage: item for item in self.stages}
+        if stage_by_name[InterviewStage.OPENING].max_primary_questions != 1:
+            raise ValueError("OPENING 阶段固定一轮")
+        if stage_by_name[InterviewStage.SUMMARY].max_primary_questions != 1:
+            raise ValueError("SUMMARY 阶段固定一次输出")
+        return self
+
+    def get_stage(self, stage: InterviewStage) -> StagePlan:
+        return next(item for item in self.stages if item.stage == stage)
+
+
+class InterviewDecision(BaseModel):
+    """Agent 对候选人回答的受约束决策，不保存模型思维链。"""
+
+    action: InterviewAction
+    next_message: str = Field(min_length=1)
+    evaluation_summary: str = Field(min_length=1, max_length=500)
+
+
+class TurnRecord(BaseModel):
+    stage: InterviewStage
+    question: str
+    candidate_answer: str
+    action: InterviewAction
+    evaluation_summary: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class AgentRunSnapshot(BaseModel):
+    """同一 runId 重放时返回的稳定下层结果。"""
+
+    answer: str
+    session_status: SessionStatus
+    state_version: int = Field(ge=0)
+    output: dict[str, str] | None = None
+
+
+class InterviewSession(BaseModel):
+    """下层持久化的单个 Agent 面试会话。"""
+
+    session_id: str
+    user_id: str
+    candidate_id: str
+    resume_id: str
+    jd_id: str | None = None
+    plan: InterviewPlan
+    status: SessionStatus = SessionStatus.ACTIVE
+    current_stage: InterviewStage = InterviewStage.OPENING
+    primary_question_count: int = Field(default=1, ge=0)
+    followup_count: int = Field(default=0, ge=0)
+    state_version: int = Field(default=0, ge=0)
+    current_question: str
+    turns: list[TurnRecord] = Field(default_factory=list)
+    initialization_run_id: str | None = None
+    run_snapshots: dict[str, AgentRunSnapshot] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

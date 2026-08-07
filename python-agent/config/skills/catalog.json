@@ -1,0 +1,17 @@
+[
+  {
+    "id": "java-backend",
+    "name": "Java 后端",
+    "description": "围绕 Java 后端开发、数据库、缓存和服务工程能力进行面试。",
+    "isPreset": true,
+    "sourceJd": null,
+    "categories": [
+      {"key": "java", "label": "Java 基础", "priority": "CORE", "keywords": ["java", "jvm"]},
+      {"key": "spring", "label": "Spring 生态", "priority": "CORE", "keywords": ["spring", "spring boot", "springcloud"]},
+      {"key": "database", "label": "数据库", "priority": "NORMAL", "keywords": ["mysql", "postgresql", "数据库", "sql"]},
+      {"key": "distributed", "label": "分布式与并发", "priority": "NORMAL", "keywords": ["分布式", "并发", "redis", "kafka"]},
+      {"key": "project", "label": "项目深挖", "priority": "ALWAYS_ONE", "keywords": ["项目", "实习", "系统"]}
+    ],
+    "display": {"icon": "Code2", "gradient": "from-orange-500 to-red-500", "iconBg": "bg-orange-100", "iconColor": "text-orange-600"}
+  }
+]

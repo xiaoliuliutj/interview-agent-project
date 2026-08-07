@@ -1,0 +1,32 @@
+spring:
+  application:
+    name: interview-agent-upper
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/interview_agent}
+    username: ${DATABASE_USERNAME:postgres}
+    password: ${DATABASE_PASSWORD:}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  data:
+    redis:
+      url: ${REDIS_URL:redis://localhost:6379}
+
+server:
+  port: ${SERVER_PORT:8080}
+
+agent:
+  default-target-role: ${AGENT_DEFAULT_TARGET_ROLE:Java 后端}
+  demo-user-id: ${AGENT_DEMO_USER_ID:demo-user}
+  python:
+    base-url: ${PYTHON_AGENT_BASE_URL:http://localhost:8000}
+    connect-timeout: ${PYTHON_AGENT_CONNECT_TIMEOUT:2s}
+    read-timeout: ${PYTHON_AGENT_READ_TIMEOUT:60s}
+  reliability:
+    max-attempts: ${AGENT_MAX_ATTEMPTS:2}
+    backoff-millis: ${AGENT_RETRY_BACKOFF_MILLIS:200}
+  async:
+    core-pool-size: ${AGENT_ASYNC_CORE_POOL_SIZE:4}
+    max-pool-size: ${AGENT_ASYNC_MAX_POOL_SIZE:16}
+    queue-capacity: ${AGENT_ASYNC_QUEUE_CAPACITY:100}

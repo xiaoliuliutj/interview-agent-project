@@ -1,0 +1,4 @@
+{
+  "stages": ["OPENING", "PROJECT", "FUNDAMENTAL", "SCENARIO", "CODING", "SUMMARY"],
+  "openingPrompt": "interview/opening.md"
+}

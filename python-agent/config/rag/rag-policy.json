@@ -1,0 +1,10 @@
+{
+  "chunkSizeTokens": 800,
+  "chunkOverlapTokens": 0,
+  "embeddingBatchSize": 10,
+  "defaultTopK": 4,
+  "defaultMinScore": 0.35,
+  "fallbackCandidateMultiplier": 3,
+  "defaultKnowledgeBaseIds": ["interview-basics"],
+  "allowedUseCases": ["QUESTION_GENERATION", "RESUME_EVALUATION", "KNOWLEDGE_BASE_QUERY"]
+}

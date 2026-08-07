@@ -1,0 +1,5 @@
+{
+  "shortTermTurnLimit": 5,
+  "historySummaryMaxCharacters": 2000,
+  "maxResumeSnapshots": 3
+}
