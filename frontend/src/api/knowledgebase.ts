@@ -1,4 +1,4 @@
-import {getErrorMessage, request} from './request';
+import {getErrorMessage, request, getUserId} from './request';
 import axios from 'axios';
 
 const API_BASE_URL = import.meta.env.PROD ? '' : 'http://localhost:8080';
@@ -195,6 +195,7 @@ export const knowledgeBaseApi = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'X-User-Id': getUserId(),
         },
         body: JSON.stringify(req),
       });

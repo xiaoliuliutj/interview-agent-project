@@ -11,7 +11,7 @@ from app.agent.rag.service import RagSearchTool
 from app.engineering.reliability.retry import AsyncRetryExecutor
 from app.core.prompt_loader import PromptLoader
 
-from .models import CandidateProfile, InterviewDecision, InterviewPlan, InterviewSession
+from .models import CandidateProfile, InterviewDecision, InterviewPlan, InterviewSession, InterviewSummary
 
 
 class StructuredChatModel(Protocol):
@@ -37,10 +37,14 @@ class InterviewPlanner:
 
     async def create_plan(self, profile: CandidateProfile) -> InterviewPlan:
         planner = self._model.with_structured_output(InterviewPlan)
-        skill = self._skill_registry.get("interview-coach")
+        skills = self._skill_registry.select_for_interview(
+            target_role=profile.target_role,
+            jd_text=profile.jd_text,
+            requested_skill_id=profile.requested_skill_id,
+        )
         system_prompt = self._prompt_loader.render(
             "interview/planner.md",
-            {"skill_instructions": skill.instructions},
+            {"skill_instructions": "\n\n".join(item.instructions for item in skills)},
         )
         input_payload = profile.model_dump(mode="json")
         if self._rag_tool is not None:
@@ -58,6 +62,9 @@ class InterviewPlanner:
         result = await self._invoke(planner, messages)
         if not isinstance(result, InterviewPlan):
             raise TypeError("模型未返回 InterviewPlan")
+        # Skill 选择属于下层 Agent 决策，写入计划快照，后续恢复会话不重新漂移。
+        if not result.selected_skills:
+            result = result.model_copy(update={"selected_skills": [item.skill_id for item in skills]})
         return result
 
     async def _invoke(self, model: StructuredChatModel, messages: object) -> object:
@@ -92,6 +99,7 @@ class InterviewDecisionAgent:
         decider = self._model.with_structured_output(InterviewDecision)
         context = {
             "current_stage": session.current_stage,
+            "difficulty": session.difficulty,
             "current_question": session.current_question,
             "candidate_answer": candidate_answer,
             "primary_question_count": session.primary_question_count,
@@ -106,6 +114,7 @@ class InterviewDecisionAgent:
                 "preferences": memory_context.preferences,
                 "weak_topics": memory_context.weak_topics,
                 "notes": memory_context.notes,
+                "question_catalog": memory_context.question_catalog,
             },
         }
         if self._rag_tool is not None:
@@ -116,10 +125,11 @@ class InterviewDecisionAgent:
                 {"content": item.chunk.content, "score": item.score}
                 for item in evidence
             ]
-        skill = self._skill_registry.get("interview-coach")
+        skill_ids = session.selected_skills or session.plan.selected_skills or ["interview-coach"]
+        skills = [self._skill_registry.get(skill_id) for skill_id in skill_ids]
         system_prompt = self._prompt_loader.render(
             "interview/decision.md",
-            {"skill_instructions": skill.instructions},
+            {"skill_instructions": "\n\n".join(item.instructions for item in skills)},
         )
         messages = [
             SystemMessage(content=system_prompt),
@@ -133,4 +143,33 @@ class InterviewDecisionAgent:
             )
         if not isinstance(result, InterviewDecision):
             raise TypeError("模型未返回 InterviewDecision")
+        return result
+
+
+class InterviewSummaryAgent:
+    """在会话结束时基于完整历史生成综合评分，避免只用最后一轮替代总结。"""
+
+    def __init__(self, model: StructuredChatModel, prompt_loader: PromptLoader,
+                 retry_executor: AsyncRetryExecutor | None = None) -> None:
+        self._model = model
+        self._prompt_loader = prompt_loader
+        self._retry_executor = retry_executor
+
+    async def summarize(self, session: InterviewSession) -> InterviewSummary:
+        evaluator = self._model.with_structured_output(InterviewSummary)
+        payload = {
+            "difficulty": session.difficulty,
+            "plan": session.plan.model_dump(mode="json"),
+            "turns": [turn.model_dump(mode="json") for turn in session.turns],
+        }
+        messages = [
+            SystemMessage(content=self._prompt_loader.render("interview/summary.md", {})),
+            HumanMessage(content=json.dumps(payload, ensure_ascii=False)),
+        ]
+        result = (
+            await self._retry_executor.execute(lambda: evaluator.ainvoke(messages))
+            if self._retry_executor is not None else await evaluator.ainvoke(messages)
+        )
+        if not isinstance(result, InterviewSummary):
+            raise TypeError("model did not return InterviewSummary")
         return result

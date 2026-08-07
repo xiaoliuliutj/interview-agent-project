@@ -2,6 +2,7 @@
 
 import json
 import logging
+from uuid import uuid4
 from collections.abc import Mapping
 
 from fastapi import FastAPI, Request
@@ -13,13 +14,17 @@ from app.agent.interview.service import InterviewAgentService
 from app.agent.rag.models import RagUseCase
 from app.agent.rag.models import KnowledgeDocument
 from app.agent.rag.service import RagService
+from app.agent.rag.answer import RagAnswerAgent
+from app.agent.schedule.agent import ScheduleParseAgent
 from app.bootstrap import build_interview_agent_service, build_resume_evaluation_agent
 from app.agent.evaluation.agent import ResumeEvaluationAgent
 from app.agent.skills.loader import SkillRegistry
+from app.agent.memory.service import MemoryService
 from app.core.contracts import (
     AgentInitializationRequest,
     AgentEvaluationRequest,
     AgentSessionCompletionRequest,
+    AgentScheduleParseRequest,
     AgentRequest,
     AgentResponse,
     ErrorInfo,
@@ -41,11 +46,17 @@ def create_app(
     service: InterviewAgentService | None = None,
     rag_service: RagService | None = None,
     resume_evaluator: ResumeEvaluationAgent | None = None,
+    memory_service: MemoryService | None = None,
+    rag_answer_agent: RagAnswerAgent | None = None,
+    schedule_parse_agent: ScheduleParseAgent | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Interview Agent Service", version="v1")
     app.state.interview_agent_service = service
     app.state.rag_service = rag_service
     app.state.resume_evaluator = resume_evaluator
+    app.state.memory_service = memory_service
+    app.state.rag_answer_agent = rag_answer_agent
+    app.state.schedule_parse_agent = schedule_parse_agent
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -97,15 +108,18 @@ def create_app(
         payload: AgentSessionCompletionRequest, request: Request
     ) -> AgentResponse:
         current_service = _resolve_service(request)
-        session = await current_service.complete_session(
-            user_id=payload.user_id,
-            session_id=payload.session_id,
+        session = await (
+            current_service.interrupt_session(user_id=payload.user_id, session_id=payload.session_id)
+            if payload.operation == "agent.session.interrupt"
+            else current_service.complete_session(user_id=payload.user_id, session_id=payload.session_id)
         )
         return _success_response(
             api_version=payload.api_version,
             request_id=payload.request_id,
             run_id=payload.run_id,
             session=session,
+            output=(session.final_evaluation.model_dump(by_alias=True)
+                    if getattr(session, "final_evaluation", None) is not None else None),
             state_version=session.state_version,
             session_status=session.status,
         )
@@ -121,6 +135,19 @@ def create_app(
             target_role=payload.target_role,
             knowledge_base_ids=tuple(payload.knowledge_base_ids or ()),
         )
+        current_memory = _resolve_memory_service(request)
+        if current_memory is not None:
+            await current_memory.record_resume_analysis(
+                user_id=payload.user_id,
+                resume_id=payload.subject_id,
+                candidate_id=payload.candidate_id or payload.subject_id,
+                resume_text=payload.input_text,
+                target_role=payload.target_role,
+                summary=result.summary,
+                questions=[item.question for item in result.issues],
+                priorities=[item.priority for item in result.issues],
+                suggestions=[item.suggestion for item in result.issues] + result.suggestions,
+            )
         return AgentResponse(
             api_version=payload.api_version,
             request_id=payload.request_id,
@@ -150,20 +177,20 @@ def create_app(
             use_case=use_case,
             knowledge_base_ids=tuple(payload.knowledge_base_ids or ()),
         )
-        answer = json.dumps(
-            [
-                {
-                    "content": result.chunk.content,
-                    "score": result.score,
-                    "knowledgeBaseId": result.chunk.knowledge_base_id,
-                    "documentId": result.chunk.document_id,
-                    "sourceName": result.chunk.source_name,
-                    "metadata": result.chunk.metadata,
-                }
-                for result in results
-            ],
-            ensure_ascii=False,
-        )
+        answer_agent = _resolve_rag_answer_agent(request)
+        if answer_agent is None:
+            raise RagConfigurationError("RAG 回答 Agent 未配置，无法基于检索结果生成回答")
+        answer = await answer_agent.answer(payload.question, results)
+        sources = [
+            {
+                "score": result.score,
+                "knowledgeBaseId": result.chunk.knowledge_base_id,
+                "documentId": result.chunk.document_id,
+                "sourceName": result.chunk.source_name,
+                "metadata": result.chunk.metadata,
+            }
+            for result in results
+        ]
         return AgentResponse(
             api_version=payload.api_version,
             request_id=payload.request_id,
@@ -175,6 +202,7 @@ def create_app(
             session_status=SessionStatus.ACTIVE,
             state_version=0,
             answer=answer,
+            output={"sources": sources},
             error=None,
         )
 
@@ -232,6 +260,28 @@ def create_app(
             error=None,
         )
 
+    @app.post("/v1/agent/schedule/parse", response_model=AgentResponse)
+    async def parse_schedule(
+        payload: AgentScheduleParseRequest, request: Request
+    ) -> AgentResponse:
+        result = await _resolve_schedule_parse_agent(request).parse(
+            payload.input_text, payload.timezone_name
+        )
+        return AgentResponse(
+            api_version=payload.api_version,
+            request_id=payload.request_id,
+            run_id=payload.run_id,
+            code=100,
+            status=RunStatus.COMPLETED,
+            user_id=payload.user_id,
+            session_id=payload.session_id,
+            session_status=SessionStatus.ACTIVE,
+            state_version=0,
+            answer=result.title,
+            output=result.model_dump(mode="json", by_alias=True),
+            error=None,
+        )
+
     @app.exception_handler(RequestValidationError)
     async def request_validation_error(
         request: Request, error: RequestValidationError
@@ -282,6 +332,43 @@ def _resolve_resume_evaluator(request: Request) -> ResumeEvaluationAgent:
     return evaluator
 
 
+def _resolve_memory_service(request: Request) -> MemoryService | None:
+    service = request.app.state.memory_service
+    if service is not None:
+        return service
+    # Resume evaluation may be used without a configured database in local tests.
+    try:
+        from app.bootstrap import build_memory_service
+        service = build_memory_service()
+        request.app.state.memory_service = service
+        return service
+    except Exception:
+        return None
+
+
+def _resolve_rag_answer_agent(request: Request) -> RagAnswerAgent | None:
+    agent = request.app.state.rag_answer_agent
+    if agent is not None:
+        return agent
+    try:
+        from app.bootstrap import build_rag_answer_agent
+        agent = build_rag_answer_agent()
+        request.app.state.rag_answer_agent = agent
+        return agent
+    except Exception:
+        return None
+
+
+def _resolve_schedule_parse_agent(request: Request) -> ScheduleParseAgent:
+    agent = request.app.state.schedule_parse_agent
+    if agent is None:
+        from app.bootstrap import build_schedule_parse_agent
+
+        agent = build_schedule_parse_agent()
+        request.app.state.schedule_parse_agent = agent
+    return agent
+
+
 def _success_response(
     *,
     api_version: str,
@@ -326,8 +413,8 @@ async def _error_response(request: Request, error: BaseException) -> AgentRespon
         run_id=str(context.get("runId", "invalid-run")),
         code=ExceptionHandler.to_code(error),
         status=RunStatus.FAILED,
-        user_id=str(context.get("userId", "unknown-user")),
-        session_id=str(context.get("sessionId", "unknown-session")),
+        user_id=str(context.get("userId") or uuid4()),
+        session_id=str(context.get("sessionId") or uuid4()),
         session_status=SessionStatus.FAILED,
         state_version=0,
         answer=None,

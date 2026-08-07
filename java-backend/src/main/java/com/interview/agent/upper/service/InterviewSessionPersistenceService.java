@@ -1,5 +1,7 @@
 package com.interview.agent.upper.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.interview.agent.upper.agent.dto.AgentResponse;
 import com.interview.agent.upper.domain.InterviewSessionEntity;
 import com.interview.agent.upper.domain.InterviewTurnEntity;
@@ -16,12 +18,15 @@ import java.util.Optional;
 public class InterviewSessionPersistenceService {
     private final InterviewSessionRepository sessionRepository;
     private final InterviewTurnRepository turnRepository;
+    private final ObjectMapper objectMapper;
 
     public InterviewSessionPersistenceService(
             InterviewSessionRepository sessionRepository,
-            InterviewTurnRepository turnRepository) {
+            InterviewTurnRepository turnRepository,
+            ObjectMapper objectMapper) {
         this.sessionRepository = sessionRepository;
         this.turnRepository = turnRepository;
+        this.objectMapper = objectMapper;
     }
 
     @Transactional
@@ -30,9 +35,15 @@ public class InterviewSessionPersistenceService {
     }
 
     @Transactional
+    public InterviewSessionEntity saveConfiguration(InterviewSessionEntity session) {
+        return sessionRepository.save(session);
+    }
+
+    @Transactional
     public void activate(String sessionId, AgentResponse response) {
         InterviewSessionEntity session = requiredForUpdate(sessionId);
         session.applyAgentResponse(response.answer(), response.sessionStatus());
+        applyFinalEvaluation(session, response);
         sessionRepository.save(session);
     }
 
@@ -54,9 +65,27 @@ public class InterviewSessionPersistenceService {
                 ? null
                 : response.output().get("evaluationSummary");
         String evaluationSummary = evaluation instanceof String value ? value : null;
-        turnRepository.save(new InterviewTurnEntity(
-                sessionId, runId, session.getCurrentQuestion(), candidateAnswer, evaluationSummary));
+        Object answerSummary = response.output() == null ? null : response.output().get("answerSummary");
+        Object score = response.output() == null ? null : response.output().get("score");
+        Object strengths = response.output() == null ? null : response.output().get("strengths");
+        Object weaknesses = response.output() == null ? null : response.output().get("weaknesses");
+        Object preferences = response.output() == null ? null : response.output().get("preferences");
+        if (!(score instanceof Number) || !(answerSummary instanceof String) || ((String) answerSummary).isBlank()) {
+            throw new BusinessException("AGENT_EVALUATION_OUTPUT_INVALID", "下层回答评估缺少分数或摘要");
+        }
+        Object stage = response.output() == null ? null : response.output().get("stage");
+        if (!(stage instanceof String value) || value.isBlank()) {
+            throw new BusinessException("AGENT_EVALUATION_OUTPUT_INVALID", "下层回答评估缺少阶段");
+        }
+        InterviewTurnEntity turn = new InterviewTurnEntity(
+                sessionId, runId, session.getCurrentQuestion(), candidateAnswer, evaluationSummary,
+                ((Number) score).intValue(),
+                (String) answerSummary,
+                json(strengths), json(weaknesses), json(preferences));
+        turn.setStage((String) stage);
+        turnRepository.save(turn);
         session.applyAgentResponse(response.answer(), response.sessionStatus());
+        applyFinalEvaluation(session, response);
         sessionRepository.save(session);
     }
 
@@ -82,6 +111,15 @@ public class InterviewSessionPersistenceService {
     public void complete(String sessionId, String userId) {
         InterviewSessionEntity session = requiredForUpdate(sessionId);
         assertOwner(session, userId);
+        session.complete();
+        sessionRepository.save(session);
+    }
+
+    @Transactional
+    public void completeFromAgent(String sessionId, String userId, AgentResponse response) {
+        InterviewSessionEntity session = requiredForUpdate(sessionId);
+        assertOwner(session, userId);
+        applyFinalEvaluation(session, response);
         session.complete();
         sessionRepository.save(session);
     }
@@ -122,5 +160,21 @@ public class InterviewSessionPersistenceService {
         if (userId == null || !userId.equals(session.getUserId())) {
             throw new BusinessException("SESSION_ACCESS_DENIED", "无权访问该面试会话");
         }
+    }
+
+    private String json(Object value) {
+        try { return objectMapper.writeValueAsString(value == null ? List.of() : value); }
+        catch (JsonProcessingException error) { return "[]"; }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void applyFinalEvaluation(InterviewSessionEntity session, AgentResponse response) {
+        if (response.output() == null) return;
+        Object raw = response.output().get("finalEvaluation");
+        if (!(raw instanceof java.util.Map<?, ?> map)) return;
+        Object score = map.get("overallScore");
+        Object summary = map.get("summary");
+        session.applyFinalEvaluation(score instanceof Number number ? number.intValue() : null,
+                summary instanceof String text ? text : response.answer());
     }
 }

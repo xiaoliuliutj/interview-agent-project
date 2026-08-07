@@ -32,7 +32,7 @@ async def test_index_uses_800_token_chunks_and_batch_size_ten() -> None:
     document = KnowledgeDocument(
         knowledge_base_id="kb-1",
         document_id="doc-1",
-        source_name="test.md",
+        source_name="reference.md",
         content="缓存一致性 " * 1200,
     )
 

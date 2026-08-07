@@ -1,0 +1,7 @@
+{
+  "id": "frontend",
+  "name": "前端开发",
+  "description": "前端岗位的结构化面试约束。",
+  "enabled": true,
+  "allowedTools": ["rag.search"]
+}

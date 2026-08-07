@@ -1,4 +1,4 @@
-import { request, getErrorMessage } from './request';
+import { request, getErrorMessage, getUserId } from './request';
 
 const API_BASE_URL = import.meta.env.PROD ? '' : 'http://localhost:8080';
 
@@ -120,7 +120,7 @@ export const ragChatApi = {
         `${API_BASE_URL}/api/rag-chat/sessions/${sessionId}/messages/stream`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': getUserId() },
           body: JSON.stringify({ question }),
         }
       );

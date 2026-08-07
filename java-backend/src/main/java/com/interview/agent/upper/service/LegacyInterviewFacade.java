@@ -14,12 +14,12 @@ import com.interview.agent.upper.domain.ResumeEntity;
 import com.interview.agent.upper.repository.CandidateRepository;
 import com.interview.agent.upper.repository.JobDescriptionRepository;
 import com.interview.agent.upper.repository.ResumeRepository;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.UUID;
 import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.stream.IntStream;
 
 /** 将保留的 React 旧 DTO 适配到新的 Java 领域服务。 */
@@ -29,29 +29,32 @@ public class LegacyInterviewFacade {
     private final CandidateRepository candidateRepository;
     private final ResumeRepository resumeRepository;
     private final JobDescriptionRepository jobDescriptionRepository;
-    private final String demoUserId;
+    private final UserIdentityResolver userIdentityResolver;
+    private final BusinessIdGenerator idGenerator;
 
     public LegacyInterviewFacade(
             InterviewService interviewService,
             CandidateRepository candidateRepository,
             ResumeRepository resumeRepository,
             JobDescriptionRepository jobDescriptionRepository,
-            @Value("${agent.demo-user-id:demo-user}") String demoUserId) {
+            UserIdentityResolver userIdentityResolver,
+            BusinessIdGenerator idGenerator) {
         this.interviewService = interviewService;
         this.candidateRepository = candidateRepository;
         this.resumeRepository = resumeRepository;
         this.jobDescriptionRepository = jobDescriptionRepository;
-        this.demoUserId = demoUserId;
+        this.userIdentityResolver = userIdentityResolver;
+        this.idGenerator = idGenerator;
     }
 
     public LegacyInterviewSession create(LegacyCreateInterviewRequest request, String userId) {
-        String effectiveUserId = userId == null || userId.isBlank() ? demoUserId : userId;
+        String effectiveUserId = userIdentityResolver.require(userId);
         String resumeId = request.resumeId() == null
-                ? Long.toString(System.currentTimeMillis())
+                ? idGenerator.next()
                 : request.resumeId().toString();
         String candidateId = "candidate-" + resumeId;
         candidateRepository.findById(candidateId).orElseGet(() ->
-                candidateRepository.save(new CandidateEntity(candidateId, effectiveUserId, "默认候选人")));
+                candidateRepository.save(new CandidateEntity(candidateId, effectiveUserId, candidateId)));
         resumeRepository.save(new ResumeEntity(
                 resumeId, candidateId, 1, request.resumeText() == null ? "" : request.resumeText()));
 
@@ -63,13 +66,19 @@ public class LegacyInterviewFacade {
         }
         InterviewView view = interviewService.start(new CreateInterviewRequest(
                 effectiveUserId, candidateId, resumeId, jdId,
-                request.questionCount() == null ? 6 : request.questionCount()));
+                request.questionCount() == null ? 6 : request.questionCount(),
+                InterviewService.normalizeDifficulty(request.difficulty()), request.skillId(),
+                request.customCategories() == null ? List.of() : request.customCategories()));
         return toLegacySession(view, request.resumeText());
     }
 
-    public LegacySubmitAnswerResponse submit(String sessionId, String answer, String runId) {
+    public LegacySubmitAnswerResponse submit(String sessionId, String userId, String answer, String runId) {
+        String owner = userIdentityResolver.require(userId);
+        if (!owner.equals(interviewService.view(sessionId).userId())) {
+            throw new BusinessException("SESSION_ACCESS_DENIED", "session does not belong to current user");
+        }
         InterviewView view = interviewService.submitAnswer(
-                sessionId, userForSession(sessionId), answer, runId);
+                sessionId, owner, answer, runId);
         boolean completed = "COMPLETED".equals(view.status());
         int currentIndex = Math.min(interviewService.turns(sessionId).size(), view.totalQuestions());
         return new LegacySubmitAnswerResponse(
@@ -79,16 +88,22 @@ public class LegacyInterviewFacade {
                 view.totalQuestions());
     }
 
-    public LegacyInterviewSession get(String sessionId) {
+    public LegacyInterviewSession get(String sessionId, String userId) {
         InterviewView view = interviewService.view(sessionId);
+        if (!userIdentityResolver.require(userId).equals(view.userId())) {
+            throw new BusinessException("SESSION_ACCESS_DENIED", "session does not belong to current user");
+        }
         String resumeText = resumeRepository.findById(view.resumeId())
                 .map(ResumeEntity::getContent)
                 .orElse("");
         return toLegacySession(view, resumeText);
     }
 
-    public LegacyCurrentQuestion currentQuestion(String sessionId) {
+    public LegacyCurrentQuestion currentQuestion(String sessionId, String userId) {
         InterviewView view = interviewService.view(sessionId);
+        if (!userIdentityResolver.require(userId).equals(view.userId())) {
+            throw new BusinessException("SESSION_ACCESS_DENIED", "session does not belong to current user");
+        }
         boolean completed = "COMPLETED".equals(view.status());
         return new LegacyCurrentQuestion(
                 completed,
@@ -97,17 +112,17 @@ public class LegacyInterviewFacade {
     }
 
     public List<LegacyInterviewListItem> list(String userId) {
-        String effectiveUserId = effectiveUser(userId);
+        String effectiveUserId = userIdentityResolver.require(userId);
         return interviewService.list(effectiveUserId).stream().map(view ->
                 new LegacyInterviewListItem(
-                        view.sessionId(), null, "MEDIUM", parseLongOrNull(view.resumeId()),
-                        view.totalQuestions(), view.status(), null, null, null,
+                        view.sessionId(), view.skillId(), view.difficulty(), parseLongOrNull(view.resumeId()),
+                        view.totalQuestions(), view.status(), view.evaluateStatus(), view.evaluateError(), view.overallScore(),
                         view.createdAt(), "COMPLETED".equals(view.status()) ? view.updatedAt() : null))
                 .toList();
     }
 
     public LegacyInterviewSession unfinished(String resumeId, String userId) {
-        InterviewView view = interviewService.findUnfinished(effectiveUser(userId), resumeId);
+        InterviewView view = interviewService.findUnfinished(userIdentityResolver.require(userId), resumeId);
         if (view == null) {
             return null;
         }
@@ -117,34 +132,35 @@ public class LegacyInterviewFacade {
     }
 
     public void saveDraft(String sessionId, String answer, String userId) {
-        interviewService.saveDraft(sessionId, effectiveUser(userId), answer);
+        interviewService.saveDraft(sessionId, userIdentityResolver.require(userId), answer);
     }
 
     public void complete(String sessionId, String userId) {
-        interviewService.complete(sessionId, effectiveUser(userId));
+        interviewService.complete(sessionId, userIdentityResolver.require(userId));
     }
 
     public void delete(String sessionId, String userId) {
-        interviewService.delete(sessionId, effectiveUser(userId));
+        interviewService.delete(sessionId, userIdentityResolver.require(userId));
     }
 
     public List<Map<String, Object>> turns(String sessionId) {
         List<com.interview.agent.upper.domain.InterviewTurnEntity> turns = interviewService.turns(sessionId);
         return IntStream.range(0, turns.size()).mapToObj(index -> {
             com.interview.agent.upper.domain.InterviewTurnEntity turn = turns.get(index);
-            return Map.<String, Object>of(
-                    "questionIndex", index,
-                    "question", turn.getQuestion() == null ? "" : turn.getQuestion(),
-                    "category", "INTERVIEW",
-                    "userAnswer", turn.getCandidateAnswer() == null ? "" : turn.getCandidateAnswer(),
-                    "score", 0,
-                    "feedback", turn.getEvaluationSummary() == null ? "" : turn.getEvaluationSummary(),
-                    "answeredAt", turn.getCreatedAt());
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("questionIndex", index);
+            result.put("question", turn.getQuestion() == null ? "" : turn.getQuestion());
+            result.put("category", turn.getStage());
+            result.put("userAnswer", turn.getCandidateAnswer() == null ? "" : turn.getCandidateAnswer());
+            result.put("score", turn.getScore() == null ? 0 : turn.getScore());
+            result.put("answerSummary", turn.getAnswerSummary() == null ? "" : turn.getAnswerSummary());
+            result.put("strengths", parseJsonArray(turn.getStrengthsJson()));
+            result.put("weaknesses", parseJsonArray(turn.getWeaknessesJson()));
+            result.put("preferences", parseJsonArray(turn.getPreferencesJson()));
+            result.put("feedback", turn.getEvaluationSummary() == null ? "" : turn.getEvaluationSummary());
+            result.put("answeredAt", turn.getCreatedAt() == null ? java.time.Instant.EPOCH : turn.getCreatedAt());
+            return result;
         }).toList();
-    }
-
-    private String userForSession(String sessionId) {
-        return interviewService.view(sessionId).userId();
     }
 
     private LegacyInterviewSession toLegacySession(InterviewView view, String resumeText) {
@@ -163,8 +179,51 @@ public class LegacyInterviewFacade {
                 null, null, null);
     }
 
-    private String effectiveUser(String userId) {
-        return userId == null || userId.isBlank() ? demoUserId : userId;
+    public Map<String, Object> report(String sessionId, String userId) {
+        InterviewView view = interviewService.view(sessionId);
+        if (!userIdentityResolver.require(userId).equals(view.userId())) {
+            throw new BusinessException("SESSION_ACCESS_DENIED", "session does not belong to current user");
+        }
+        List<Map<String, Object>> turnViews = turns(sessionId);
+        return Map.of(
+                "sessionId", view.sessionId(),
+                "totalQuestions", view.totalQuestions(),
+                "overallScore", view.overallScore() == null ? 0 : view.overallScore(),
+                "overallFeedback", view.finalSummary() == null ? "" : view.finalSummary(),
+                "questionDetails", turnViews,
+                "categoryScores", categoryScores(turnViews),
+                "strengths", flatten(turnViews, "strengths"),
+                "improvements", flatten(turnViews, "weaknesses"),
+                "referenceAnswers", List.of());
+    }
+
+    private List<?> parseJsonArray(String raw) {
+        if (raw == null || raw.isBlank()) return List.of();
+        try { return new com.fasterxml.jackson.databind.ObjectMapper().readValue(raw, List.class); }
+        catch (Exception ignored) { return List.of(); }
+    }
+
+    private List<Object> flatten(List<Map<String, Object>> values, String key) {
+        return values.stream()
+                .flatMap(item -> ((List<?>) item.getOrDefault(key, List.of())).stream())
+                .map(value -> (Object) value)
+                .distinct().toList();
+    }
+
+    private List<Map<String, Object>> categoryScores(List<Map<String, Object>> values) {
+        return values.stream().filter(item -> item.get("category") != null).collect(java.util.stream.Collectors.groupingBy(
+                item -> String.valueOf(item.get("category")),
+                java.util.LinkedHashMap::new,
+                java.util.stream.Collectors.toList())).entrySet().stream().map(entry -> {
+            List<Map<String, Object>> items = entry.getValue();
+            double average = items.stream().map(item -> item.get("score"))
+                    .filter(Number.class::isInstance).mapToInt(item -> ((Number) item).intValue()).average().orElse(0);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("category", entry.getKey());
+            result.put("score", Math.round(average));
+            result.put("count", items.size());
+            return result;
+        }).toList();
     }
 
     private Long parseLongOrNull(String value) {

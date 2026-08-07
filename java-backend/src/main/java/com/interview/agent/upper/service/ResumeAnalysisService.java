@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class ResumeAnalysisService {
@@ -45,7 +46,14 @@ public class ResumeAnalysisService {
             throw new BusinessException("RESUME_ACCESS_DENIED", "无权分析该简历");
         }
         ResumeAnalysisEntity analysis = persistence.create(resumeId);
-        worker.evaluate(analysis.getId(), userId, resume, defaultTargetRole);
+        try {
+            worker.enqueue(analysis.getId(), userId);
+        } catch (RuntimeException error) {
+            String message = error.getMessage() == null ? error.getClass().getSimpleName()
+                    : error.getMessage();
+            persistence.fail(analysis.getId(), message);
+            throw error;
+        }
         return toView(analysis);
     }
 
@@ -72,10 +80,17 @@ public class ResumeAnalysisService {
                 entity.getSkillMatchScore(), entity.getExpressionScore(),
                 entity.getProjectScore(), entity.getSummary(), entity.getUpdatedAt(),
                 stringList(entity.getStrengthsJson()), stringList(entity.getSuggestionsJson()),
+                mapList(entity.getIssuesJson()),
                 entity.getError());
     }
 
     private List<String> stringList(String raw) {
+        if (raw == null || raw.isBlank()) return List.of();
+        try { return objectMapper.readValue(raw, new TypeReference<>() { }); }
+        catch (Exception error) { return List.of(); }
+    }
+
+    private List<Map<String, Object>> mapList(String raw) {
         if (raw == null || raw.isBlank()) return List.of();
         try { return objectMapper.readValue(raw, new TypeReference<>() { }); }
         catch (Exception error) { return List.of(); }

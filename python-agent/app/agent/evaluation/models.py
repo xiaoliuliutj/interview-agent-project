@@ -3,6 +3,12 @@
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class ResumeIssue(BaseModel):
+    question: str = Field(min_length=1)
+    priority: str = Field(default="NORMAL", min_length=1)
+    suggestion: str = Field(min_length=1)
+
+
 class ResumeEvaluation(BaseModel):
     overall_score: int = Field(ge=0, le=100, alias="overallScore")
     content_score: int = Field(ge=0, le=100, alias="contentScore")
@@ -13,5 +19,6 @@ class ResumeEvaluation(BaseModel):
     summary: str = Field(min_length=1, max_length=2000)
     strengths: list[str] = Field(default_factory=list, max_length=10)
     suggestions: list[str] = Field(default_factory=list, max_length=10)
+    issues: list[ResumeIssue] = Field(default_factory=list, max_length=20)
 
     model_config = ConfigDict(populate_by_name=True)

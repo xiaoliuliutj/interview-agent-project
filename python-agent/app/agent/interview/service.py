@@ -9,7 +9,7 @@ from app.core.contracts import SessionStatus
 from app.core.prompt_loader import PromptLoader
 from app.engineering.idempotency.policy import IdempotencyPolicy
 
-from .agent import InterviewDecisionAgent, InterviewPlanner
+from .agent import InterviewDecisionAgent, InterviewPlanner, InterviewSummaryAgent
 from .models import (
     AgentRunSnapshot,
     CandidateProfile,
@@ -40,6 +40,7 @@ class InterviewAgentService:
         workflow: InterviewWorkflow,
         prompt_loader: PromptLoader,
         memory_service: MemoryService,
+        summary_agent: InterviewSummaryAgent | None = None,
         idempotency_policy: IdempotencyPolicy | None = None,
     ) -> None:
         self._planner = planner
@@ -48,6 +49,7 @@ class InterviewAgentService:
         self._workflow = workflow
         self._prompt_loader = prompt_loader
         self._memory_service = memory_service
+        self._summary_agent = summary_agent
         self._idempotency_policy = idempotency_policy or IdempotencyPolicy(100)
 
     async def initialize_session(
@@ -75,7 +77,9 @@ class InterviewAgentService:
             candidate_id=profile.candidate_id,
             resume_id=profile.resume_id,
             jd_id=profile.jd_id,
+            difficulty=profile.desired_difficulty,
             plan=plan,
+            selected_skills=plan.selected_skills,
             current_question=self._workflow.opening_message(
                 self._prompt_loader, profile.target_role
             ),
@@ -111,12 +115,37 @@ class InterviewAgentService:
         if session.status == SessionStatus.COMPLETED:
             return session
         if session.status == SessionStatus.FAILED:
-            raise ConsistencyError("失败的 Agent 会话不能直接完成")
+            await self._memory_service.finalize_session(session=session, interrupted=True)
+            return session
 
         expected_version = session.state_version
         session.status = SessionStatus.COMPLETED
+        session.final_summary = session.final_summary or "面试已结束，历史回答已归档。"
+        if self._summary_agent is not None and session.turns:
+            try:
+                session.final_evaluation = await self._summary_agent.summarize(session)
+                session.final_summary = session.final_evaluation.summary
+            except Exception:
+                # 总结失败不阻断会话关闭，后续可靠性任务可重新生成。
+                pass
         session.updated_at = datetime.now(timezone.utc)
-        return await self._repository.save(session, expected_version=expected_version)
+        saved = await self._repository.save(session, expected_version=expected_version)
+        await self._memory_service.finalize_session(session=saved, interrupted=False)
+        return saved
+
+    async def interrupt_session(self, *, user_id: str, session_id: str) -> InterviewSession:
+        session = await self._repository.get(session_id)
+        if session is None or session.user_id != user_id:
+            raise ConsistencyError("Agent session not found")
+        if session.status in {SessionStatus.COMPLETED, SessionStatus.FAILED}:
+            return session
+        expected_version = session.state_version
+        session.status = SessionStatus.FAILED
+        session.interrupted = True
+        session.final_summary = "面试在完成前中断，已保存当前历史和评估。"
+        saved = await self._repository.save(session, expected_version=expected_version)
+        await self._memory_service.finalize_session(session=saved, interrupted=True)
+        return saved
 
     async def submit_answer_for_run(
         self,
@@ -171,6 +200,14 @@ class InterviewAgentService:
 
         turn = self._record_turn(session, candidate_answer, decision)
         self._apply_decision(session, decision)
+        if session.status == SessionStatus.COMPLETED and self._summary_agent is not None:
+            try:
+                session.final_evaluation = await self._summary_agent.summarize(session)
+                session.final_summary = session.final_evaluation.summary
+                session.current_question = session.final_summary
+                decision = decision.model_copy(update={"next_message": session.final_summary})
+            except Exception:
+                pass
         session.updated_at = datetime.now(timezone.utc)
         snapshot = AgentRunSnapshot(
             answer=session.current_question,
@@ -178,6 +215,12 @@ class InterviewAgentService:
             state_version=expected_version + 1,
             output={
                 "evaluationSummary": decision.evaluation_summary,
+                "answerSummary": decision.answer_summary or decision.evaluation_summary,
+                "score": decision.score,
+                "strengths": decision.strengths,
+                "weaknesses": decision.weaknesses,
+                "preferences": decision.preferences,
+                "finalEvaluation": session.final_evaluation.model_dump(by_alias=True) if session.final_evaluation else None,
                 "action": decision.action.value,
                 "stage": turn.stage.value,
             },
@@ -188,6 +231,10 @@ class InterviewAgentService:
                 session.run_snapshots.pop(next(iter(session.run_snapshots)))
         saved = await self._repository.save(session, expected_version=expected_version)
         await self._memory_service.record_turn(session=saved, turn=turn)
+        if saved.status in {SessionStatus.COMPLETED, SessionStatus.FAILED}:
+            await self._memory_service.finalize_session(
+                session=saved, interrupted=saved.status == SessionStatus.FAILED
+            )
         return AgentSubmissionResult(session=saved, snapshot=snapshot)
 
     def _allowed_actions(self, session: InterviewSession) -> set[InterviewAction]:
@@ -222,8 +269,14 @@ class InterviewAgentService:
             candidate_answer=candidate_answer,
             action=decision.action,
             evaluation_summary=decision.evaluation_summary,
+            score=decision.score,
+            answer_summary=decision.answer_summary or decision.evaluation_summary,
+            strengths=decision.strengths,
+            weaknesses=decision.weaknesses,
+            preferences=decision.preferences,
         )
         session.turns.append(turn)
+        session.asked_question_catalog.append(turn.question)
         return turn
 
     def _apply_decision(
@@ -258,4 +311,5 @@ class InterviewAgentService:
     def _complete(session: InterviewSession, summary: str) -> None:
         session.current_stage = InterviewStage.SUMMARY
         session.status = "COMPLETED"
+        session.final_summary = summary
         session.current_question = summary

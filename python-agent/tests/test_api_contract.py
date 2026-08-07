@@ -65,7 +65,7 @@ class FakeRagService:
                     chunk_id="doc-1:0",
                     knowledge_base_id="kb-1",
                     document_id="doc-1",
-                    source_name="test.md",
+                    source_name="reference.md",
                     chunk_index=0,
                     content="缓存一致性需要考虑更新顺序。",
                 ),

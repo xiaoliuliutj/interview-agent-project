@@ -20,6 +20,8 @@ class RagPolicy:
     fallback_candidate_multiplier: int
     default_knowledge_base_ids: tuple[str, ...]
     allowed_use_cases: frozenset[RagUseCase]
+    cache_ttl_seconds: int = 300
+    cache_max_entries: int = 256
 
     @classmethod
     def load(cls, path: Path | None = None) -> "RagPolicy":
@@ -37,6 +39,8 @@ class RagPolicy:
                 allowed_use_cases=frozenset(
                     RagUseCase(value) for value in raw["allowedUseCases"]
                 ),
+                cache_ttl_seconds=int(raw.get("cacheTtlSeconds", 300)),
+                cache_max_entries=int(raw.get("cacheMaxEntries", 256)),
             )
         except (
             FileNotFoundError,
@@ -57,4 +61,6 @@ class RagPolicy:
             raise RagConfigurationError("RAG 检索参数无效")
         if not policy.default_knowledge_base_ids or not policy.allowed_use_cases:
             raise RagConfigurationError("RAG 知识库或用途不能为空")
+        if policy.cache_ttl_seconds < 0 or policy.cache_max_entries < 1:
+            raise RagConfigurationError("invalid RAG cache policy")
         return policy

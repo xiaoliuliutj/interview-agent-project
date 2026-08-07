@@ -168,6 +168,14 @@ app/
 - `SkillRegistry.categories_for_jd()` 根据目录中的关键词确定性提取分类，供原 React
   的自定义 JD 页面使用。它不调用大模型，Java 只代理结果，避免上下层重复实现 Skill
   选择逻辑。
+- 已提供 Java 后端、Python 后端、前端、算法与数据结构、系统设计和 AI Agent 开发六个可选公开 Skill；每个 Skill 的元数据和面试约束均在独立文件中，不把可变考察范围写进 Python 代码。
+
+### 日程解析 Agent
+
+- `app/agent/schedule/` 使用结构化输出将自然语言日程解析为标题、开始时间和结束时间；Prompt 位于 `config/prompts/schedule/parse.md`。
+- Prompt 接收当前 UTC 时间和用户时区，只能抽取输入文本明确给出的信息。缺少时间时返回 `null`，由 Java 上层和前端要求用户确认，不能编造预约时间。
+- Java Gateway 使用独立的 `agent.schedule.parse` 协议调用此能力；Python 不创建业务日程，也不写 Java 的排期表。
+- 对模型未填充但文本明确包含“今天/明天/后天 + 时刻 + 时长”的情况，下层执行受限的确定性补全；其他不明确的字段保持 `null`，不会猜测预约时间。真实模型连通验证已覆盖该路径。
 
 ### 简历评价 Agent
 

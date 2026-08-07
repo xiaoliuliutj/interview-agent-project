@@ -29,6 +29,8 @@ public class ResumeAnalysisEntity {
     private String strengthsJson;
     @Column(columnDefinition = "TEXT")
     private String suggestionsJson;
+    @Column(columnDefinition = "TEXT")
+    private String issuesJson;
     @Column(length = 500)
     private String error;
     private Instant createdAt;
@@ -50,6 +52,14 @@ public class ResumeAnalysisEntity {
             int overallScore, int contentScore, int structureScore, int skillMatchScore,
             int expressionScore, int projectScore, String summary,
             String strengthsJson, String suggestionsJson) {
+        complete(overallScore, contentScore, structureScore, skillMatchScore, expressionScore,
+                projectScore, summary, strengthsJson, suggestionsJson, "[]");
+    }
+
+    public void complete(
+            int overallScore, int contentScore, int structureScore, int skillMatchScore,
+            int expressionScore, int projectScore, String summary,
+            String strengthsJson, String suggestionsJson, String issuesJson) {
         this.status = "COMPLETED";
         this.overallScore = overallScore;
         this.contentScore = contentScore;
@@ -60,6 +70,7 @@ public class ResumeAnalysisEntity {
         this.summary = summary;
         this.strengthsJson = strengthsJson;
         this.suggestionsJson = suggestionsJson;
+        this.issuesJson = issuesJson;
         this.error = null;
         this.updatedAt = Instant.now();
     }
@@ -82,6 +93,7 @@ public class ResumeAnalysisEntity {
     public String getSummary() { return summary; }
     public String getStrengthsJson() { return strengthsJson; }
     public String getSuggestionsJson() { return suggestionsJson; }
+    public String getIssuesJson() { return issuesJson; }
     public String getError() { return error; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }

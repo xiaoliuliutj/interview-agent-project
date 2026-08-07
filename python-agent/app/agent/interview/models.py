@@ -1,6 +1,7 @@
 """面试 Agent 的领域模型。"""
 
 from datetime import datetime, timezone
+from typing import Any
 from enum import StrEnum
 
 from pydantic import BaseModel, Field, model_validator
@@ -41,6 +42,8 @@ class CandidateProfile(BaseModel):
     target_role: str
     interview_duration_minutes: int = Field(default=40, ge=15, le=120)
     desired_difficulty: Difficulty = Difficulty.MEDIUM
+    requested_skill_id: str | None = None
+    custom_categories: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class StagePlan(BaseModel):
@@ -58,6 +61,9 @@ class InterviewPlan(BaseModel):
     candidate_summary: str
     strategy_summary: str
     stages: list[StagePlan]
+    selected_skills: list[str] = Field(default_factory=list, alias="selectedSkills")
+
+    model_config = {"populate_by_name": True}
 
     @model_validator(mode="after")
     def validate_stage_order(self) -> "InterviewPlan":
@@ -83,6 +89,12 @@ class InterviewDecision(BaseModel):
     action: InterviewAction
     next_message: str = Field(min_length=1)
     evaluation_summary: str = Field(min_length=1, max_length=500)
+    # 评估字段由 Agent 在决定下一步动作前生成；保留旧字段以兼容已有模型响应。
+    score: int = Field(default=0, ge=0, le=100)
+    answer_summary: str = Field(default="", max_length=1000)
+    strengths: list[str] = Field(default_factory=list, max_length=10)
+    weaknesses: list[str] = Field(default_factory=list, max_length=10)
+    preferences: list[str] = Field(default_factory=list, max_length=10)
 
 
 class TurnRecord(BaseModel):
@@ -91,7 +103,22 @@ class TurnRecord(BaseModel):
     candidate_answer: str
     action: InterviewAction
     evaluation_summary: str
+    score: int = Field(default=0, ge=0, le=100)
+    answer_summary: str = ""
+    strengths: list[str] = Field(default_factory=list, max_length=10)
+    weaknesses: list[str] = Field(default_factory=list, max_length=10)
+    preferences: list[str] = Field(default_factory=list, max_length=10)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class InterviewSummary(BaseModel):
+    overall_score: int = Field(ge=0, le=100, alias="overallScore")
+    summary: str = Field(min_length=1, max_length=2000)
+    strengths: list[str] = Field(default_factory=list, max_length=10)
+    weaknesses: list[str] = Field(default_factory=list, max_length=10)
+    suggestions: list[str] = Field(default_factory=list, max_length=10)
+
+    model_config = {"populate_by_name": True}
 
 
 class AgentRunSnapshot(BaseModel):
@@ -100,7 +127,7 @@ class AgentRunSnapshot(BaseModel):
     answer: str
     session_status: SessionStatus
     state_version: int = Field(ge=0)
-    output: dict[str, str] | None = None
+    output: dict[str, object] | None = None
 
 
 class InterviewSession(BaseModel):
@@ -111,6 +138,8 @@ class InterviewSession(BaseModel):
     candidate_id: str
     resume_id: str
     jd_id: str | None = None
+    difficulty: Difficulty = Difficulty.MEDIUM
+    selected_skills: list[str] = Field(default_factory=list)
     plan: InterviewPlan
     status: SessionStatus = SessionStatus.ACTIVE
     current_stage: InterviewStage = InterviewStage.OPENING
@@ -119,6 +148,10 @@ class InterviewSession(BaseModel):
     state_version: int = Field(default=0, ge=0)
     current_question: str
     turns: list[TurnRecord] = Field(default_factory=list)
+    asked_question_catalog: list[str] = Field(default_factory=list)
+    final_summary: str | None = None
+    final_evaluation: InterviewSummary | None = None
+    interrupted: bool = False
     initialization_run_id: str | None = None
     run_snapshots: dict[str, AgentRunSnapshot] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

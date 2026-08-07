@@ -8,6 +8,7 @@ import com.interview.agent.upper.api.dto.LegacyInterviewListItem;
 import com.interview.agent.upper.api.dto.LegacySubmitAnswerRequest;
 import com.interview.agent.upper.api.dto.LegacySubmitAnswerResponse;
 import com.interview.agent.upper.service.LegacyInterviewFacade;
+import com.interview.agent.upper.service.InterviewReportPdfService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -21,7 +22,6 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
@@ -30,9 +30,11 @@ import java.util.Map;
 @RequestMapping("/api/interview/sessions")
 public class LegacyInterviewController {
     private final LegacyInterviewFacade facade;
+    private final InterviewReportPdfService reportPdfService;
 
-    public LegacyInterviewController(LegacyInterviewFacade facade) {
+    public LegacyInterviewController(LegacyInterviewFacade facade, InterviewReportPdfService reportPdfService) {
         this.facade = facade;
+        this.reportPdfService = reportPdfService;
     }
 
     @GetMapping
@@ -49,13 +51,15 @@ public class LegacyInterviewController {
     }
 
     @GetMapping("/{sessionId}")
-    public ApiResult<LegacyInterviewSession> get(@PathVariable String sessionId) {
-        return ApiResult.success(facade.get(sessionId));
+    public ApiResult<LegacyInterviewSession> get(@PathVariable String sessionId,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return ApiResult.success(facade.get(sessionId, userId));
     }
 
     @GetMapping("/{sessionId}/question")
-    public ApiResult<LegacyCurrentQuestion> question(@PathVariable String sessionId) {
-        return ApiResult.success(facade.currentQuestion(sessionId));
+    public ApiResult<LegacyCurrentQuestion> question(@PathVariable String sessionId,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return ApiResult.success(facade.currentQuestion(sessionId, userId));
     }
 
     @GetMapping("/unfinished/{resumeId}")
@@ -69,8 +73,9 @@ public class LegacyInterviewController {
     public ApiResult<LegacySubmitAnswerResponse> answer(
             @PathVariable String sessionId,
             @RequestBody LegacySubmitAnswerRequest request,
-            @RequestHeader(value = "X-Run-Id", required = false) String runId) {
-        return ApiResult.success(facade.submit(sessionId, request.answer(), runId));
+            @RequestHeader(value = "X-Run-Id", required = false) String runId,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return ApiResult.success(facade.submit(sessionId, userId, request.answer(), runId));
     }
 
     @PutMapping("/{sessionId}/answers")
@@ -83,24 +88,15 @@ public class LegacyInterviewController {
     }
 
     @GetMapping("/{sessionId}/report")
-    public ApiResult<Map<String, Object>> report(@PathVariable String sessionId) {
-        LegacyInterviewSession session = facade.get(sessionId);
-        List<Map<String, Object>> turns = facade.turns(sessionId);
-        return ApiResult.success(Map.of(
-                "sessionId", session.sessionId(),
-                "totalQuestions", session.totalQuestions(),
-                "overallScore", 0,
-                "overallFeedback", "面试评价将在全部阶段完成后生成",
-                "questionDetails", turns,
-                "categoryScores", List.of(),
-                "strengths", List.of(),
-                "improvements", List.of(),
-                "referenceAnswers", List.of()));
+    public ApiResult<Map<String, Object>> report(@PathVariable String sessionId,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return ApiResult.success(facade.report(sessionId, userId));
     }
 
     @GetMapping("/{sessionId}/details")
-    public ApiResult<Map<String, Object>> details(@PathVariable String sessionId) {
-        LegacyInterviewSession session = facade.get(sessionId);
+    public ApiResult<Map<String, Object>> details(@PathVariable String sessionId,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        LegacyInterviewSession session = facade.get(sessionId, userId);
         return ApiResult.success(Map.of(
                 "sessionId", session.sessionId(),
                 "totalQuestions", session.totalQuestions(),
@@ -108,27 +104,17 @@ public class LegacyInterviewController {
                 "answers", facade.turns(sessionId)));
     }
 
-    /**
-     * 保留原 React 导出入口。首期输出可下载的 UTF-8 文本，不宣称生成生产级 PDF。
-     */
     @GetMapping("/{sessionId}/export")
-    public ResponseEntity<byte[]> export(@PathVariable String sessionId) {
-        LegacyInterviewSession session = facade.get(sessionId);
-        StringBuilder content = new StringBuilder()
-                .append("Interview ").append(session.sessionId()).append('\n')
-                .append("status: ").append(session.status()).append('\n')
-                .append("totalQuestions: ").append(session.totalQuestions()).append("\n\n");
-        for (Map<String, Object> turn : facade.turns(sessionId)) {
-            content.append("Question ").append(turn.get("questionIndex")).append('\n')
-                    .append(String.valueOf(turn.get("question"))).append('\n')
-                    .append("Answer: ").append(String.valueOf(turn.get("userAnswer"))).append('\n')
-                    .append("Feedback: ").append(String.valueOf(turn.get("feedback"))).append("\n\n");
-        }
+    public ResponseEntity<byte[]> export(@PathVariable String sessionId,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        LegacyInterviewSession session = facade.get(sessionId, userId);
+        Map<String, Object> report = facade.report(sessionId, userId);
+        byte[] pdf = reportPdfService.render(session.sessionId(), session.status(), session.totalQuestions(), report);
         return ResponseEntity.ok()
-                .contentType(MediaType.TEXT_PLAIN)
+                .contentType(MediaType.APPLICATION_PDF)
                 .header(HttpHeaders.CONTENT_DISPOSITION,
-                        "attachment; filename=\"interview-" + sessionId + ".txt\"")
-                .body(content.toString().getBytes(StandardCharsets.UTF_8));
+                        "attachment; filename=\"interview-" + sessionId + ".pdf\"")
+                .body(pdf);
     }
 
     @DeleteMapping("/{sessionId}")

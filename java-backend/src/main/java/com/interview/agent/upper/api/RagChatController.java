@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -43,53 +44,61 @@ public class RagChatController {
     }
 
     @PostMapping
-    public ApiResult<RagChatSessionView> create(@Valid @RequestBody CreateRagChatSessionRequest request) {
-        return ApiResult.success(service.create(request.knowledgeBaseIds(), request.title()));
+    public ApiResult<RagChatSessionView> create(@Valid @RequestBody CreateRagChatSessionRequest request,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return ApiResult.success(service.create(userId, request.knowledgeBaseIds(), request.title()));
     }
 
     @GetMapping
-    public ApiResult<List<RagChatSessionListItemView>> list() {
-        return ApiResult.success(service.list());
+    public ApiResult<List<RagChatSessionListItemView>> list(
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return ApiResult.success(service.list(userId));
     }
 
     @GetMapping("/{sessionId}")
-    public ApiResult<RagChatSessionDetailView> detail(@PathVariable Long sessionId) {
-        return ApiResult.success(service.detail(sessionId));
+    public ApiResult<RagChatSessionDetailView> detail(@PathVariable Long sessionId,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return ApiResult.success(service.detail(sessionId, userId));
     }
 
     @PutMapping("/{sessionId}/title")
     public ApiResult<Void> updateTitle(
-            @PathVariable Long sessionId, @Valid @RequestBody RagChatTitleRequest request) {
-        service.updateTitle(sessionId, request.title());
+            @PathVariable Long sessionId, @Valid @RequestBody RagChatTitleRequest request,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        service.updateTitle(sessionId, userId, request.title());
         return ApiResult.success(null);
     }
 
     @PutMapping("/{sessionId}/knowledge-bases")
     public ApiResult<Void> updateKnowledgeBases(
-            @PathVariable Long sessionId, @Valid @RequestBody RagChatKnowledgeBasesRequest request) {
-        service.updateKnowledgeBases(sessionId, request.knowledgeBaseIds());
+            @PathVariable Long sessionId, @Valid @RequestBody RagChatKnowledgeBasesRequest request,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        service.updateKnowledgeBases(sessionId, userId, request.knowledgeBaseIds());
         return ApiResult.success(null);
     }
 
     @PutMapping("/{sessionId}/pin")
-    public ApiResult<Void> togglePin(@PathVariable Long sessionId) {
-        service.togglePin(sessionId);
+    public ApiResult<Void> togglePin(@PathVariable Long sessionId,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        service.togglePin(sessionId, userId);
         return ApiResult.success(null);
     }
 
     @DeleteMapping("/{sessionId}")
-    public ApiResult<Void> delete(@PathVariable Long sessionId) {
-        service.delete(sessionId);
+    public ApiResult<Void> delete(@PathVariable Long sessionId,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        service.delete(sessionId, userId);
         return ApiResult.success(null);
     }
 
     @PostMapping(value = "/{sessionId}/messages/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter message(
-            @PathVariable Long sessionId, @Valid @RequestBody RagChatMessageRequest request) {
+            @PathVariable Long sessionId, @Valid @RequestBody RagChatMessageRequest request,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MILLIS);
         executor.execute(() -> {
             try {
-                String answer = service.answer(sessionId, request.question());
+                String answer = service.answer(sessionId, userId, request.question());
                 // 前端按 SSE data 行自行还原换行，因此固定发送单行 payload。
                 emitter.send(SseEmitter.event().name("message").data(answer.replace("\n", "\\n").replace("\r", "\\r")));
                 emitter.complete();

@@ -4,6 +4,8 @@ import com.interview.agent.upper.api.dto.CreateInterviewRequest;
 import com.interview.agent.upper.api.dto.InterviewView;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import com.interview.agent.upper.config.RabbitTaskConfiguration;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -11,23 +13,20 @@ import java.util.concurrent.CompletableFuture;
 public class InterviewAsyncWorker {
     private final InterviewService interviewService;
     private final InterviewTaskPersistenceService taskPersistence;
+    private final RabbitTemplate rabbitTemplate;
 
     public InterviewAsyncWorker(
             InterviewService interviewService,
-            InterviewTaskPersistenceService taskPersistence) {
+            InterviewTaskPersistenceService taskPersistence,
+            RabbitTemplate rabbitTemplate) {
         this.interviewService = interviewService;
         this.taskPersistence = taskPersistence;
+        this.rabbitTemplate = rabbitTemplate;
     }
 
-    @Async("interviewTaskExecutor")
     public CompletableFuture<Void> createInterview(String taskId, CreateInterviewRequest request) {
-        taskPersistence.markRunning(taskId);
-        try {
-            InterviewView result = interviewService.start(request);
-            taskPersistence.markCompleted(taskId, result.sessionId());
-        } catch (RuntimeException error) {
-            taskPersistence.markFailed(taskId, safeMessage(error));
-        }
+        rabbitTemplate.convertAndSend(RabbitTaskConfiguration.EXCHANGE,
+                RabbitTaskConfiguration.ROUTING_KEY, new InterviewTaskMessage(taskId, request));
         return CompletableFuture.completedFuture(null);
     }
 

@@ -10,8 +10,15 @@ CREATE TABLE IF NOT EXISTS resumes (
     id VARCHAR(255) PRIMARY KEY,
     candidate_id VARCHAR(255),
     version INTEGER NOT NULL DEFAULT 1,
-    content TEXT
+    content TEXT,
+    file_hash VARCHAR(64),
+    original_filename VARCHAR(512),
+    file_size BIGINT,
+    content_type VARCHAR(255),
+    storage_key VARCHAR(1024),
+    created_at TIMESTAMPTZ
 );
+CREATE INDEX IF NOT EXISTS idx_resumes_file_hash ON resumes(file_hash);
 
 CREATE TABLE IF NOT EXISTS resume_analyses (
     id BIGSERIAL PRIMARY KEY,
@@ -26,6 +33,7 @@ CREATE TABLE IF NOT EXISTS resume_analyses (
     summary TEXT,
     strengths_json TEXT,
     suggestions_json TEXT,
+    issues_json TEXT,
     error VARCHAR(500),
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
@@ -47,11 +55,17 @@ CREATE TABLE IF NOT EXISTS interview_sessions (
     candidate_id VARCHAR(255),
     resume_id VARCHAR(255),
     jd_id VARCHAR(255),
+    skill_id VARCHAR(255),
+    difficulty VARCHAR(32),
     total_questions INTEGER NOT NULL DEFAULT 6,
     status VARCHAR(32),
     state_version BIGINT NOT NULL DEFAULT 0,
     current_question TEXT,
     draft_answer TEXT,
+    overall_score INTEGER,
+    final_summary TEXT,
+    evaluate_status VARCHAR(32),
+    evaluate_error TEXT,
     created_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ
 );
@@ -63,6 +77,12 @@ CREATE TABLE IF NOT EXISTS interview_turns (
     question TEXT,
     candidate_answer TEXT,
     evaluation_summary TEXT,
+    score INTEGER,
+    answer_summary TEXT,
+    strengths_json TEXT,
+    weaknesses_json TEXT,
+    preferences_json TEXT,
+    stage VARCHAR(32),
     created_at TIMESTAMPTZ
 );
 
@@ -90,12 +110,14 @@ CREATE TABLE IF NOT EXISTS interview_schedules (
 
 CREATE TABLE IF NOT EXISTS knowledge_bases (
     id VARCHAR(255) PRIMARY KEY,
+    owner_id VARCHAR(255) NOT NULL,
     name VARCHAR(255) NOT NULL,
     category VARCHAR(255),
     original_filename VARCHAR(512),
     file_size BIGINT,
     content_type VARCHAR(255),
     content TEXT,
+    original_bytes BYTEA,
     vector_status VARCHAR(32),
     vector_error VARCHAR(500),
     chunk_count INTEGER NOT NULL DEFAULT 0,
@@ -104,6 +126,8 @@ CREATE TABLE IF NOT EXISTS knowledge_bases (
     created_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ
 );
+CREATE INDEX IF NOT EXISTS idx_knowledge_bases_owner_created
+    ON knowledge_bases (owner_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS rag_chat_sessions (
     id BIGSERIAL PRIMARY KEY,

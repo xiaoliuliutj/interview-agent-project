@@ -1,6 +1,7 @@
 """RAG 索引、检索和回退逻辑。"""
 
 from pathlib import Path
+from time import monotonic
 
 from app.core.exceptions import RagDependencyError, RagFilterUnsupported
 
@@ -27,6 +28,7 @@ class RagService:
             chunk_size_tokens=policy.chunk_size_tokens,
             overlap_tokens=policy.chunk_overlap_tokens,
         )
+        self._search_cache: dict[str, tuple[float, list[RagSearchResult]]] = {}
 
     async def index_document(self, document: KnowledgeDocument) -> int:
         chunks = self._chunker.split(document)
@@ -46,6 +48,7 @@ class RagService:
             raise
         except Exception as error:
             raise RagDependencyError("RAG 文档向量化失败") from error
+        self.invalidate_cache()
         return len(chunks)
 
     async def index_file(
@@ -81,9 +84,16 @@ class RagService:
         selected_min_score = (
             self._policy.default_min_score if min_score is None else min_score
         )
+        cache_key = "|".join([
+            str(use_case), ",".join(sorted(selected_kbs)), normalized_query.lower(),
+            str(selected_top_k), str(selected_min_score),
+        ])
+        cached = self._search_cache.get(cache_key)
+        if cached and (self._policy.cache_ttl_seconds == 0 or monotonic() - cached[0] < self._policy.cache_ttl_seconds):
+            return [item.model_copy(deep=True) for item in cached[1]]
         query_vector = await self._embedding_provider.embed_query(normalized_query)
         try:
-            return await self._repository.search(
+            results = await self._repository.search(
                 query_vector,
                 top_k=selected_top_k,
                 min_score=selected_min_score,
@@ -98,12 +108,19 @@ class RagService:
                 knowledge_base_ids=selected_kbs,
                 apply_metadata_filter=False,
             )
-            return [
+            results = [
                 result
                 for result in fallback
                 if not selected_kbs
                 or result.chunk.knowledge_base_id in selected_kbs
             ][:selected_top_k]
+        self._search_cache[cache_key] = (monotonic(), [item.model_copy(deep=True) for item in results])
+        while len(self._search_cache) > self._policy.cache_max_entries:
+            self._search_cache.pop(next(iter(self._search_cache)))
+        return results
+
+    def invalidate_cache(self) -> None:
+        self._search_cache.clear()
 
 
 class RagSearchTool:

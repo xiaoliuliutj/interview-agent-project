@@ -8,6 +8,7 @@ import com.interview.agent.upper.agent.dto.AgentRagIndexRequest;
 import com.interview.agent.upper.agent.dto.AgentCompleteRequest;
 import com.interview.agent.upper.agent.dto.AgentResumeEvaluateRequest;
 import com.interview.agent.upper.agent.dto.AgentSkillRequest;
+import com.interview.agent.upper.agent.dto.AgentScheduleParseRequest;
 
 public interface AgentGateway {
     AgentResponse initialize(AgentInitializeRequest request);
@@ -23,4 +24,6 @@ public interface AgentGateway {
     AgentResponse indexRag(AgentRagIndexRequest request);
 
     AgentResponse skills(AgentSkillRequest request);
+
+    AgentResponse parseSchedule(AgentScheduleParseRequest request);
 }

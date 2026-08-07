@@ -25,6 +25,10 @@ public class InterviewTaskPersistenceService {
         required(taskId).running();
     }
 
+    public boolean isCompleted(String taskId) {
+        return required(taskId).isCompleted();
+    }
+
     @Transactional
     public void markCompleted(String taskId, String sessionId) {
         required(taskId).complete(sessionId);

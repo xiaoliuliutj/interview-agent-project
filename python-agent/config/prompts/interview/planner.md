@@ -6,3 +6,4 @@
 
 Skill 约束：
 {{skill_instructions}}
+初始化时必须严格使用 candidate.desiredDifficulty 作为本次面试的 difficulty，并把它固化到所有阶段计划；不要在后续轮次自行改变难度。根据 Skill 指令选择与职位相关的题目，结合长期记忆中的已提问目录避免重复。

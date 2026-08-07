@@ -18,7 +18,14 @@ public class InterviewTaskService {
 
     public InterviewTaskEntity submitCreate(CreateInterviewRequest request) {
         InterviewTaskEntity task = taskPersistence.create("INTERVIEW_INITIALIZE");
-        worker.createInterview(task.getId(), request);
+        try {
+            worker.createInterview(task.getId(), request);
+        } catch (RuntimeException error) {
+            String message = error.getMessage() == null ? error.getClass().getSimpleName()
+                    : error.getMessage();
+            taskPersistence.markFailed(task.getId(), message);
+            throw error;
+        }
         return task;
     }
 

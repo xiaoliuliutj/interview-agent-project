@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -51,7 +51,7 @@ class CandidateSnapshot(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    candidate_id: str = Field(alias="candidateId", min_length=1)
+    candidate_id: str | None = Field(default=None, alias="candidateId", min_length=1)
     resume_id: str = Field(alias="resumeId", min_length=1)
     jd_id: str | None = Field(default=None, alias="jdId")
     resume_text: str = Field(default="", alias="resumeText")
@@ -63,6 +63,8 @@ class CandidateSnapshot(BaseModel):
     desired_difficulty: Literal["EASY", "MEDIUM", "HARD"] = Field(
         default="MEDIUM", alias="desiredDifficulty"
     )
+    requested_skill_id: str | None = Field(default=None, alias="requestedSkillId")
+    custom_categories: list[dict[str, Any]] = Field(default_factory=list, alias="customCategories")
 
 
 class AgentInitializationRequest(BaseModel):
@@ -90,7 +92,7 @@ class AgentSessionCompletionRequest(BaseModel):
     run_id: str = Field(alias="runId", min_length=1)
     user_id: str = Field(alias="userId", min_length=1)
     session_id: str = Field(alias="sessionId", min_length=1)
-    operation: Literal["agent.session.complete"] = "agent.session.complete"
+    operation: Literal["agent.session.complete", "agent.session.interrupt"] = "agent.session.complete"
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -107,9 +109,26 @@ class AgentEvaluationRequest(BaseModel):
     operation: Literal["agent.resume.evaluate"] = "agent.resume.evaluate"
     subject_type: Literal["RESUME"] = Field(default="RESUME", alias="subjectType")
     subject_id: str = Field(alias="subjectId", min_length=1)
+    candidate_id: str | None = Field(default=None, alias="candidateId", min_length=1)
     input_text: str = Field(alias="inputText", min_length=1)
     target_role: str = Field(alias="targetRole", min_length=1)
     knowledge_base_ids: list[str] | None = Field(default=None, alias="knowledgeBaseIds")
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class AgentScheduleParseRequest(BaseModel):
+    """由上层发起的日程文本结构化抽取请求。"""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    api_version: str = Field(default="v1", alias="apiVersion", min_length=1)
+    request_id: str = Field(alias="requestId", min_length=1)
+    run_id: str = Field(alias="runId", min_length=1)
+    user_id: str = Field(alias="userId", min_length=1)
+    session_id: str = Field(alias="sessionId", min_length=1)
+    operation: Literal["agent.schedule.parse"] = "agent.schedule.parse"
+    input_text: str = Field(alias="inputText", min_length=1)
+    timezone_name: str = Field(alias="timezone", min_length=1)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

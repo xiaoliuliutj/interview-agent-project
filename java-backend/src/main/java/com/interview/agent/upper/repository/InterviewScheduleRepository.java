@@ -6,11 +6,16 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Collection;
 
 public interface InterviewScheduleRepository extends JpaRepository<InterviewScheduleEntity, Long> {
+    List<InterviewScheduleEntity> findByUserIdOrderByStartAt(String userId);
     List<InterviewScheduleEntity> findByUserIdAndStartAtBetweenOrderByStartAt(
             String userId, Instant start, Instant end);
 
     List<InterviewScheduleEntity> findByUserIdAndStatusOrderByStartAt(
             String userId, ScheduleStatus status);
+
+    List<InterviewScheduleEntity> findByStatusInAndEndAtBefore(
+            Collection<ScheduleStatus> statuses, Instant endAt);
 }

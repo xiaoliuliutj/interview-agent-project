@@ -22,9 +22,10 @@ Java 不保存 Python Agent 的 Prompt、Skill、RAG 决策或记忆上下文。
 | 面试 Agent | `app/agent/interview/` | InterviewPlan、六阶段状态机、受约束决策和状态版本 |
 | 双层记忆 | `app/agent/memory/` | 默认最近 5 轮短期窗口（配置允许 3～5）；用户级长期摘要、简历快照、偏好和薄弱点 |
 | MCP 参考工具 | `app/agent/mcp/` | 只读查询外置面试基础资料；stdio 启动，受长度和结果数量限制 |
-| Skill 目录适配 | `app/agent/skills/`、`SkillController` | Python 读取外置 Skill 目录并做确定性 JD 分类，Java 只代理给原 React 技能接口 |
+| Skill 目录适配 | `app/agent/skills/`、`SkillController` | Python 读取外置 Skill 目录并做确定性 JD 分类，已提供 Java、Python、前端、算法、系统设计和 AI Agent 方向；Java 只代理给原 React 技能接口 |
 | 简历评价 Agent | `app/agent/evaluation/` | RAG 可选证据、结构化评分、总结、优势和建议；Java 异步持久化结果 |
-| RAG | `app/agent/rag/` | 默认 800 Token 无重叠切片、批量 10、pgvector 检索、KB 过滤与本地回退 |
+| RAG | `app/agent/rag/` | 默认 800 Token 无重叠切片、批量 10、pgvector 检索、KB 过滤与本地回退；不向调用方暴露 chunk 正文 |
+| 日程解析 | `app/agent/schedule/` | 通过外置 Prompt 和结构化输出解析自然语言面试安排，Java 负责时间范围校验和持久化 |
 | HTTP 入口 | `app/api/application.py` | 健康检查、初始化、问答和统一异常响应 |
 | 持久化 | `app/engineering/persistence/` | PostgreSQL 会话、长期记忆和 pgvector 仓库；无数据库时不伪造持久化 |
 | 可靠性与幂等 | `app/engineering/reliability/`、`app/engineering/idempotency/` | LLM 有限异步重试；`runId` 保存稳定响应快照并防止重复推进 |
@@ -41,10 +42,11 @@ Java 不保存 Python Agent 的 Prompt、Skill、RAG 决策或记忆上下文。
 - `InterviewSessionEntity` 使用 JPA `@Version`，`InterviewSessionPersistenceService` 负责事务边界和并发版本校验。
 - 文字面试兼容层已持久化会话列表、未完成会话恢复、答案草稿、提前结束、删除和问答历史；草稿不调用下层，正式答案才调用 Python Agent。
 - 提前结束通过 `agent.session.complete` 同步关闭下层会话；关闭请求不带问答上下文，且不会删除按用户保留的长期记忆。
-- `InterviewTaskEntity`、`InterviewAsyncWorker` 和线程池展示持久化异步任务生命周期。
-- `LegacyInterviewController` 保留 React 原有的核心面试/简历上传路径，并通过 Facade 转换为新领域 DTO；已补充简历导出、面试导出和知识库下载入口，首期返回 UTF-8 文本而不是伪造生产级 PDF。`KnowledgeBaseController`、`RagChatController` 和 `InterviewScheduleController` 已提供旧路径适配。语音面试仍是说明书中定义的后续扩展，不纳入首期核心链路。
+- `InterviewTaskEntity`、RabbitMQ durable queue、`RabbitAgentWorkConsumer` 和 `RabbitInterviewTaskConsumer` 共同实现面试初始化、简历分析和知识库向量化的持久化异步任务生命周期；消息只保存资源 ID，失败进入重试和死信队列。
+- 知识库管理接口全部按 `X-User-Id` 校验资料归属，RAG 会话选择知识库时也会再次校验。
+- `LegacyInterviewController` 保留 React 原有的核心面试/简历上传路径，并通过 Facade 转换为新领域 DTO；简历和面试导出均生成中文字体支持的真实 PDF。`KnowledgeBaseController`、`RagChatController` 和 `InterviewScheduleController` 已提供旧路径适配；日程解析由 Python 下层结构化抽取，Java 提供过期状态定时推进。语音面试仍是说明书中定义的后续扩展，不纳入首期核心链路。
 
-Java 源码尚未运行 Maven 编译/测试：当前 `D:\Maven\apache-maven-3.9.16` 是源码目录，缺少 `bin/mvn.cmd`，系统也未提供可用 JDK。环境补齐后必须执行编译、Gateway 契约测试、并发测试和异步任务测试。
+Java 已使用 IntelliJ JBR 21 和 IDEA 内置 Maven 完成 `-DskipTests compile`；当前工程仍没有 Java 测试类，RabbitMQ/PostgreSQL/真实下层服务的集成测试需要在依赖服务启动后执行。
 
 部署资产已静态核对：Java 长文本实体显式映射为 PostgreSQL `TEXT`，避免 `@Lob` 与初始化脚本类型不一致；Compose 会等待 Python `/health` 通过后启动 Java，Nginx 对 `/api/` 关闭响应缓冲以支持 SSE。当前本机没有 Docker，未执行容器构建或启动验证。
 
@@ -71,13 +73,17 @@ React
 使用 `D:\Anaconda\envs\inter-guide\python.exe` 执行：
 
 ```text
-python -m pytest tests -q       25 passed
+python -m pytest tests -q       28 passed
 python -m compileall -q app     通过
 ```
 
-测试覆盖：面试阶段推进、重复会话、短期/长期记忆、统一 API 响应、RAG 切片、Embedding 批次、知识库过滤回退，以及 MCP 只读工具边界。PostgreSQL、真实 Embedding、Java 和完整容器启动仍属于待环境补齐后的集成验证。
+测试覆盖：面试阶段推进、重复会话、短期/长期记忆、统一 API 响应、RAG 切片、Embedding 批次、知识库过滤回退、Skill 目录以及 MCP 只读工具边界。PostgreSQL、真实 Embedding、RabbitMQ、Java 运行时和完整容器启动仍属于待环境补齐后的集成验证。
+
+前端使用 Node 24 运行时直接执行 TypeScript 检查和 Vite 生产构建已通过；项目部署要求 Node 20 LTS，当前系统 Node 16 不作为验证依据。
 
 真实模型验证：已使用当前本地 OpenAI-compatible 配置完成聊天连通、六阶段面试规划和单轮受约束 Decision Agent 决策验证；测试过程未输出敏感配置。数据库和 Embedding 未配置，因此上述验证不替代持久化/RAG 集成测试。
+
+日程解析真实模型验证：模型能够返回结构化标题和时区；对于“明天/下午三点/一小时”等明确中文表达，下层确定性补全得到带时区的开始和结束时间。验证过程未输出密钥。
 
 ## 6. 虚拟机部署
 

@@ -19,6 +19,8 @@ public class InterviewSessionEntity {
     private String candidateId;
     private String resumeId;
     private String jdId;
+    private String skillId;
+    private String difficulty;
     private int totalQuestions;
     @Enumerated(EnumType.STRING)
     private InterviewSessionStatus status;
@@ -28,6 +30,12 @@ public class InterviewSessionEntity {
     private String currentQuestion;
     @Column(columnDefinition = "TEXT")
     private String draftAnswer;
+    private Integer overallScore;
+    @Column(columnDefinition = "TEXT")
+    private String finalSummary;
+    private String evaluateStatus;
+    @Column(columnDefinition = "TEXT")
+    private String evaluateError;
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -49,6 +57,11 @@ public class InterviewSessionEntity {
         this.status = InterviewSessionStatus.INITIALIZING;
         this.createdAt = Instant.now();
         this.updatedAt = this.createdAt;
+    }
+
+    public void configure(String skillId, String difficulty) {
+        this.skillId = skillId;
+        this.difficulty = difficulty;
     }
 
     public InterviewSessionEntity(
@@ -80,6 +93,12 @@ public class InterviewSessionEntity {
         this.updatedAt = Instant.now();
     }
 
+    public void applyFinalEvaluation(Integer score, String summary) {
+        this.overallScore = score;
+        this.finalSummary = summary;
+        this.updatedAt = Instant.now();
+    }
+
     public void saveDraft(String answer) {
         this.draftAnswer = answer == null ? "" : answer;
         this.updatedAt = Instant.now();
@@ -95,11 +114,17 @@ public class InterviewSessionEntity {
     public String getCandidateId() { return candidateId; }
     public String getResumeId() { return resumeId; }
     public String getJdId() { return jdId; }
+    public String getSkillId() { return skillId; }
+    public String getDifficulty() { return difficulty; }
     public int getTotalQuestions() { return totalQuestions; }
     public InterviewSessionStatus getStatus() { return status; }
     public long getStateVersion() { return stateVersion; }
     public String getCurrentQuestion() { return currentQuestion; }
     public String getDraftAnswer() { return draftAnswer; }
+    public Integer getOverallScore() { return overallScore; }
+    public String getFinalSummary() { return finalSummary; }
+    public String getEvaluateStatus() { return evaluateStatus; }
+    public String getEvaluateError() { return evaluateError; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
 }

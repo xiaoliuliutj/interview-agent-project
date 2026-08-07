@@ -1,6 +1,6 @@
 """生产环境的下层 Agent 服务依赖组装。"""
 
-from app.agent.interview.agent import InterviewDecisionAgent, InterviewPlanner
+from app.agent.interview.agent import InterviewDecisionAgent, InterviewPlanner, InterviewSummaryAgent
 from app.agent.evaluation.agent import ResumeEvaluationAgent
 from app.agent.interview.service import InterviewAgentService
 from app.agent.interview.workflow import InterviewWorkflow
@@ -10,6 +10,8 @@ from app.agent.memory.service import MemoryService
 from app.agent.rag.embedding import OpenAIEmbeddingProvider
 from app.agent.rag.policy import RagPolicy
 from app.agent.rag.service import RagSearchTool, RagService
+from app.agent.rag.answer import RagAnswerAgent
+from app.agent.schedule.agent import ScheduleParseAgent
 from app.engineering.reliability.policy import RetryPolicy
 from app.engineering.reliability.retry import AsyncRetryExecutor
 from app.engineering.idempotency.policy import IdempotencyPolicy
@@ -26,6 +28,14 @@ from app.engineering.persistence.long_term_memory_repository import (
 from app.engineering.persistence.rag_vector_repository import (
     PostgresRagVectorRepository,
 )
+
+
+def build_memory_service(settings: Settings | None = None) -> MemoryService:
+    current = settings or get_settings()
+    session_factory = create_session_factory(current)
+    return MemoryService(
+        PostgresLongTermMemoryRepository(session_factory), MemoryPolicy.load()
+    )
 
 
 def build_interview_agent_service(
@@ -54,9 +64,8 @@ def build_interview_agent_service(
         repository=PostgresInterviewSessionRepository(session_factory),
         workflow=workflow,
         prompt_loader=prompt_loader,
-        memory_service=MemoryService(
-            PostgresLongTermMemoryRepository(session_factory), MemoryPolicy.load()
-        ),
+        memory_service=build_memory_service(current),
+        summary_agent=InterviewSummaryAgent(model, prompt_loader, retry_executor),
         idempotency_policy=IdempotencyPolicy.load(),
     )
 
@@ -68,6 +77,14 @@ def build_rag_service(settings: Settings | None = None) -> RagService:
         repository=PostgresRagVectorRepository(session_factory),
         embedding_provider=OpenAIEmbeddingProvider(current),
         policy=RagPolicy.load(),
+    )
+
+
+def build_rag_answer_agent(settings: Settings | None = None) -> RagAnswerAgent:
+    current = settings or get_settings()
+    return RagAnswerAgent(
+        LLMFactory.create_chat_model(current), PromptLoader(),
+        AsyncRetryExecutor(RetryPolicy.load()),
     )
 
 
@@ -83,4 +100,12 @@ def build_resume_evaluation_agent(
         skill_registry=SkillRegistry(),
         rag_tool=rag_tool,
         retry_executor=retry_executor,
+    )
+
+
+def build_schedule_parse_agent(settings: Settings | None = None) -> ScheduleParseAgent:
+    current = settings or get_settings()
+    return ScheduleParseAgent(
+        LLMFactory.create_chat_model(current), PromptLoader(),
+        AsyncRetryExecutor(RetryPolicy.load()),
     )

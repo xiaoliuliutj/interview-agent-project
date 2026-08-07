@@ -16,6 +16,25 @@ const instance: AxiosInstance = axios.create({
   timeout: 60000,
 });
 
+const USER_STORAGE_KEY = 'interview-agent-user-id';
+function currentUserId(): string {
+  const existing = localStorage.getItem(USER_STORAGE_KEY);
+  if (existing && existing.trim()) return existing;
+  const generated = crypto.randomUUID();
+  localStorage.setItem(USER_STORAGE_KEY, generated);
+  return generated;
+}
+
+export function getUserId(): string {
+  return currentUserId();
+}
+
+instance.interceptors.request.use((config) => {
+  config.headers = config.headers ?? {};
+  config.headers['X-User-Id'] = currentUserId();
+  return config;
+});
+
 /**
  * 响应拦截器
  * 

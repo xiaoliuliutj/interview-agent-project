@@ -41,7 +41,7 @@ public class ResumeAnalysisPersistenceService {
                 integer(output, "structureScore"), integer(output, "skillMatchScore"),
                 integer(output, "expressionScore"), integer(output, "projectScore"),
                 string(output, "summary"), json(output.get("strengths")),
-                json(output.get("suggestions")));
+                json(output.get("suggestions")), json(output.get("issues")));
     }
 
     @Transactional

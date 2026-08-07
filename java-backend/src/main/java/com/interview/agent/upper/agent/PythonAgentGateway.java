@@ -8,6 +8,7 @@ import com.interview.agent.upper.agent.dto.AgentRagIndexRequest;
 import com.interview.agent.upper.agent.dto.AgentCompleteRequest;
 import com.interview.agent.upper.agent.dto.AgentResumeEvaluateRequest;
 import com.interview.agent.upper.agent.dto.AgentSkillRequest;
+import com.interview.agent.upper.agent.dto.AgentScheduleParseRequest;
 import com.interview.agent.upper.engineering.reliability.AgentCallExecutor;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -56,6 +57,11 @@ public class PythonAgentGateway implements AgentGateway {
     @Override
     public AgentResponse skills(AgentSkillRequest request) {
         return callExecutor.execute(() -> post("/v1/agent/skills", request));
+    }
+
+    @Override
+    public AgentResponse parseSchedule(AgentScheduleParseRequest request) {
+        return callExecutor.execute(() -> post("/v1/agent/schedule/parse", request));
     }
 
     private AgentResponse post(String path, Object request) {

@@ -54,6 +54,9 @@ public class InterviewService {
                 sessionId, request.userId(), candidate.getId(), resume.getId(),
                 jd == null ? null : jd.getId(),
                 request.totalQuestions() == null ? 6 : request.totalQuestions()));
+        InterviewSessionEntity createdSession = sessionPersistence.load(sessionId);
+        createdSession.configure(request.skillId(), normalizeDifficulty(request.desiredDifficulty()));
+        sessionPersistence.saveConfiguration(createdSession);
 
         AgentResponse response;
         try {
@@ -123,7 +126,7 @@ public class InterviewService {
         if (!isSuccessful(response)) {
             throw new BusinessException("AGENT_COMPLETE_FAILED", "下层 Agent 会话关闭失败");
         }
-        sessionPersistence.complete(sessionId, userId);
+        sessionPersistence.completeFromAgent(sessionId, userId, response);
     }
 
     public void delete(String sessionId, String userId) {
@@ -179,7 +182,19 @@ public class InterviewService {
                 new AgentInitializeRequest.CandidateSnapshot(
                         candidate.getId(), resume.getId(), jd == null ? null : jd.getId(),
                         resume.getContent(), jd == null ? "" : jd.getContent(),
-                        jd == null ? defaultTargetRole : jd.getTitle(), 40, "MEDIUM"));
+                        jd == null ? defaultTargetRole : jd.getTitle(), 40,
+                        normalizeDifficulty(request.desiredDifficulty()), request.skillId(),
+                        request.customCategories() == null ? List.of() : request.customCategories()));
+    }
+
+    static String normalizeDifficulty(String value) {
+        if (value == null || value.isBlank()) return "MEDIUM";
+        return switch (value.strip().toUpperCase()) {
+            case "JUNIOR", "EASY" -> "EASY";
+            case "MID", "MEDIUM" -> "MEDIUM";
+            case "SENIOR", "HARD" -> "HARD";
+            default -> throw new BusinessException("DIFFICULTY_INVALID", "difficulty must be junior, mid, senior, EASY, MEDIUM or HARD");
+        };
     }
 
     private boolean isSuccessful(AgentResponse response) {
@@ -189,8 +204,11 @@ public class InterviewService {
     private InterviewView toView(InterviewSessionEntity session) {
         return new InterviewView(
                 session.getId(), session.getUserId(), session.getCandidateId(),
-                session.getResumeId(), session.getJdId(), session.getTotalQuestions(),
+                session.getResumeId(), session.getJdId(), session.getSkillId(), session.getDifficulty(),
+                session.getTotalQuestions(),
                 session.getStatus().name(), session.getStateVersion(),
-                session.getCurrentQuestion(), session.getCreatedAt(), session.getUpdatedAt());
+                session.getCurrentQuestion(), session.getOverallScore(), session.getFinalSummary(),
+                session.getEvaluateStatus(), session.getEvaluateError(),
+                session.getCreatedAt(), session.getUpdatedAt());
     }
 }

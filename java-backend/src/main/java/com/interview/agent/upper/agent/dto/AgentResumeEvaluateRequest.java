@@ -14,6 +14,7 @@ public record AgentResumeEvaluateRequest(
         String operation,
         String subjectType,
         @NotBlank String subjectId,
+        @NotBlank String candidateId,
         @NotBlank String inputText,
         @NotBlank String targetRole,
         List<String> knowledgeBaseIds) {
@@ -24,11 +25,12 @@ public record AgentResumeEvaluateRequest(
             String userId,
             String sessionId,
             String subjectId,
+            String candidateId,
             String inputText,
             String targetRole,
             List<String> knowledgeBaseIds) {
         this(apiVersion, requestId, runId, userId, sessionId,
-                "agent.resume.evaluate", "RESUME", subjectId, inputText,
+                "agent.resume.evaluate", "RESUME", subjectId, candidateId, inputText,
                 targetRole, knowledgeBaseIds);
     }
 }

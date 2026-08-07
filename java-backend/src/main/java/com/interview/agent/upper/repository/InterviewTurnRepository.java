@@ -8,4 +8,5 @@ import java.util.List;
 public interface InterviewTurnRepository extends JpaRepository<InterviewTurnEntity, Long> {
     boolean existsByRunId(String runId);
     List<InterviewTurnEntity> findBySessionIdOrderByCreatedAt(String sessionId);
+    void deleteBySessionId(String sessionId);
 }

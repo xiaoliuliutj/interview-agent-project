@@ -30,16 +30,16 @@
 
 ### 异步任务
 
-- `InterviewTaskEntity` 先持久化任务状态，再由独立的 `InterviewAsyncWorker` 在线程池中调用业务服务；可展示 `PENDING/RUNNING/COMPLETED/FAILED` 生命周期。
-- 当前为单体首期实现；后续虚拟机部署和多实例运行时，可将 Worker 触发替换为 Redis Stream/消息队列，并采用 Outbox 保证任务事件不丢失。
-- `ResumeAnalysisEntity`、`ResumeAnalysisService` 和 `ResumeAnalysisWorker` 将简历评价作为独立异步任务；任务状态和结构化结果由 Java 持久化，模型调用和 RAG 证据仍由 Python 完成。
+- `InterviewTaskEntity` 先持久化面试初始化任务状态，再由 `InterviewAsyncWorker` 投递 RabbitMQ durable queue；可展示 `PENDING/RUNNING/COMPLETED/FAILED` 生命周期。
+- 简历分析与知识库向量化也使用 RabbitMQ。消息仅保存任务类型、资源 ID 和用户 ID，消费者重新读取数据库记录，避免把 JPA 实体或大文件文本序列化进队列；失败采用有限重试与死信队列。
+- `ResumeAnalysisEntity`、`ResumeAnalysisService` 和 `ResumeAnalysisWorker` 将简历评价作为独立异步任务；任务状态和结构化结果由 Java 持久化，模型调用和 RAG 证据仍由 Python 完成。投递失败会同步标记失败，不会留下无状态的 PENDING 记录。
 
 ### 知识库与排期兼容模块
 
-- `KnowledgeBaseService` 只保存知识库元数据和原文，`KnowledgeBaseIndexWorker` 异步调用 Python 的 `rag.index`；Java 不实现切片或向量相似度。
-- 知识库查询通过 Python 的 `rag.search` 获取片段，再由 Java 组装原 React 所需的兼容响应；`/query` 和 `/query/stream` 复用同一服务，流式接口当前发送一次完整检索结果而非伪造 Token 流。
+- `KnowledgeBaseService` 保存用户归属、元数据、原文件和解析原文，`KnowledgeBaseIndexWorker` 通过 RabbitMQ 异步调用 Python 的 `rag.index`；Java 不实现切片或向量相似度。
+- 知识库查询由 Python 在检索证据基础上生成回答，Java 不接触或拼接命中 chunk；`/query` 和 `/query/stream` 复用同一服务，流式接口当前发送一次完整回答而非伪造 Token 流。
 - `RagChatService` 只管理知识库问答会话、消息、置顶和删除；`RagChatController` 用 `SseEmitter` 返回一次检索结果。它使用独立的 `KNOWLEDGE_BASE_QUERY` 用途，不把页面查询伪装成面试 Agent 的出题或简历评价。
-- `InterviewScheduleService` 是纯 Java 的排期 CRUD 和状态流转，解析只做轻量文本首行提取；需要语义解析时再提交 Python Agent 任务。
+- `InterviewScheduleService` 负责排期 CRUD、用户校验和时间范围校验；自然语言解析委托 Python 下层的结构化抽取 Agent，Prompt 位于配置目录。定时任务将超过结束时间的未取消日程推进为 COMPLETED。
 
 ## 4. 工程化专题
 
@@ -52,6 +52,6 @@
 ## 6. 当前 Java 环境
 
 - 用户提供的 `D:\\Maven\\apache-maven-3.9.16` 当前是 Maven 源码目录，不是包含可执行 `bin\\mvn.cmd` 的 Maven 发布版。
-- 当前 `java` / `javac` 命令不可用，Java 上层暂不运行测试。
-- 后续需要先准备可用 JDK 17 或 21，以及 Maven 发布版或项目 Maven Wrapper，再开始 Java 构建和测试。
+- 已使用 IntelliJ 自带 JBR 21（`D:\IdeaLij\IntelliJ IDEA 2025.3.3\jbr`）和 IDEA 内置 Maven 执行 `mvn test`，构建通过；当前还没有 Java 测试类，因此未运行任何测试用例。
+- 虚拟机部署仍应安装独立的 JDK 21 与 Maven 3.9.x 二进制发行版，不依赖 IDEA 的内置运行时。
 - PostgreSQL 初始化脚本使用 `TEXT` 保存简历、JD、问答、评价、知识库原文和排期文本；对应实体显式使用 `@Column(columnDefinition = "TEXT")`，避免 PostgreSQL 下 `@Lob` 的 OID/CLOB 校验差异。

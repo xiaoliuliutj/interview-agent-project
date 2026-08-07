@@ -4,3 +4,4 @@
 
 Skill 约束：
 {{skill_instructions}}
+必须先完成本轮评估再决定动作：score 为 0~100，answer_summary 是回答摘要，strengths/weaknesses/preferences 是短列表。不要把下一问题当作评估结果；evaluation_summary 说明本轮评估依据。

@@ -1,0 +1,7 @@
+{
+  "id": "ai-agent-dev",
+  "name": "AI Agent 开发",
+  "description": "AI Agent 开发岗位的结构化面试约束。",
+  "enabled": true,
+  "allowedTools": ["rag.search", "session.read"]
+}

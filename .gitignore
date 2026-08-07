@@ -6,6 +6,7 @@
 # Java and Gradle
 **/.gradle/
 **/build/
+**/target/
 *.class
 
 # Python
@@ -30,6 +31,10 @@ coverage/
 # Runtime files
 *.log
 logs/
+
+# Deployment-only fonts (the CJK font is supplied outside Git)
+infrastructure/fonts/*
+!infrastructure/fonts/.gitkeep
 
 # Temporary assistant workspace
 _scratch/*

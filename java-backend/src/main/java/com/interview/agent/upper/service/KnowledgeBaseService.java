@@ -22,13 +22,15 @@ import java.util.UUID;
 
 @Service
 public class KnowledgeBaseService {
-    public record DownloadedDocument(String filename, String contentType, String content) {}
+    public record DownloadedDocument(String filename, String contentType, byte[] content) {}
 
     private final KnowledgeBaseRepository repository;
     private final KnowledgeBaseIndexWorker indexWorker;
     private final KnowledgeBasePersistenceService persistence;
     private final AgentGateway agentGateway;
     private final ObjectMapper objectMapper;
+    private final UserIdentityResolver identity;
+    private final BusinessIdGenerator idGenerator;
     private final Tika tika = new Tika();
 
     public KnowledgeBaseService(
@@ -36,17 +38,22 @@ public class KnowledgeBaseService {
             KnowledgeBaseIndexWorker indexWorker,
             KnowledgeBasePersistenceService persistence,
             AgentGateway agentGateway,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            UserIdentityResolver identity,
+            BusinessIdGenerator idGenerator) {
         this.repository = repository;
         this.indexWorker = indexWorker;
         this.persistence = persistence;
         this.agentGateway = agentGateway;
         this.objectMapper = objectMapper;
+        this.identity = identity;
+        this.idGenerator = idGenerator;
     }
 
     @Transactional
-    public KnowledgeBaseView upload(MultipartFile file, String name, String category) throws IOException {
-        String id = Long.toString(System.currentTimeMillis());
+    public KnowledgeBaseView upload(MultipartFile file, String name, String category, String userId) throws IOException {
+        String ownerId = identity.require(userId);
+        String id = idGenerator.next();
         String content;
         try {
             content = tika.parseToString(file.getInputStream());
@@ -54,93 +61,100 @@ public class KnowledgeBaseService {
             throw new BusinessException("KNOWLEDGE_BASE_PARSE_FAILED", "知识库文件解析失败");
         }
         KnowledgeBaseEntity entity = repository.save(new KnowledgeBaseEntity(
-                id,
+                id, ownerId,
                 name == null || name.isBlank() ? file.getOriginalFilename() : name,
                 category,
-                file.getOriginalFilename() == null ? "unknown" : file.getOriginalFilename(),
+                file.getOriginalFilename() == null || file.getOriginalFilename().isBlank()
+                        ? "knowledge-base-" + id : file.getOriginalFilename(),
                 file.getSize(),
                 file.getContentType(),
                 content));
-        indexWorker.index(entity);
+        entity.attachOriginalBytes(file.getBytes());
+        entity = repository.save(entity);
+        indexWorker.index(entity.getId(), ownerId);
         return toView(entity);
     }
 
-    public List<KnowledgeBaseView> list() {
-        return repository.findAll().stream().map(this::toView).toList();
+    public List<KnowledgeBaseView> list(String userId) {
+        return repository.findByOwnerIdOrderByCreatedAtDesc(identity.require(userId)).stream().map(this::toView).toList();
     }
 
-    public KnowledgeBaseView get(long id) { return toView(required(Long.toString(id))); }
+    public KnowledgeBaseView get(long id, String userId) { return toView(required(Long.toString(id), userId)); }
 
-    public DownloadedDocument download(long id) {
-        KnowledgeBaseEntity entity = required(Long.toString(id));
+    public DownloadedDocument download(long id, String userId) {
+        KnowledgeBaseEntity entity = required(Long.toString(id), userId);
         String contentType = entity.getContentType() == null || entity.getContentType().isBlank()
                 ? "text/plain" : entity.getContentType();
         String filename = entity.getOriginalFilename() == null || entity.getOriginalFilename().isBlank()
                 ? "knowledge-base-" + id + ".txt" : entity.getOriginalFilename();
-        return new DownloadedDocument(
-                filename, contentType, entity.getContent() == null ? "" : entity.getContent());
+        byte[] original = entity.getOriginalBytes();
+        return new DownloadedDocument(filename, contentType,
+                original == null ? (entity.getContent() == null ? new byte[0]
+                        : entity.getContent().getBytes(java.nio.charset.StandardCharsets.UTF_8)) : original);
     }
 
     @Transactional
-    public void delete(long id) { repository.delete(required(Long.toString(id))); }
+    public void delete(long id, String userId) { repository.delete(required(Long.toString(id), userId)); }
 
-    public List<String> categories() {
-        return repository.findAll().stream().map(KnowledgeBaseEntity::getCategory)
+    public List<String> categories(String userId) {
+        return repository.findByOwnerIdOrderByCreatedAtDesc(identity.require(userId)).stream().map(KnowledgeBaseEntity::getCategory)
                 .filter(value -> value != null && !value.isBlank()).distinct().toList();
     }
 
-    public List<KnowledgeBaseView> byCategory(String category) {
-        return repository.findByCategory(category).stream().map(this::toView).toList();
+    public List<KnowledgeBaseView> byCategory(String category, String userId) {
+        return repository.findByOwnerIdAndCategory(identity.require(userId), category).stream().map(this::toView).toList();
     }
 
-    public List<KnowledgeBaseView> uncategorized() {
-        return repository.findByCategoryIsNull().stream().map(this::toView).toList();
+    public List<KnowledgeBaseView> uncategorized(String userId) {
+        return repository.findByOwnerIdAndCategoryIsNull(identity.require(userId)).stream().map(this::toView).toList();
     }
 
     @Transactional
-    public void updateCategory(long id, String category) { required(Long.toString(id)).updateCategory(category); }
+    public void updateCategory(long id, String category, String userId) { required(Long.toString(id), userId).updateCategory(category); }
 
-    public List<KnowledgeBaseView> search(String keyword) {
-        return repository.findByNameContainingIgnoreCase(keyword).stream().map(this::toView).toList();
+    public List<KnowledgeBaseView> search(String keyword, String userId) {
+        return repository.findByOwnerIdAndNameContainingIgnoreCase(identity.require(userId), keyword).stream().map(this::toView).toList();
     }
 
-    public KnowledgeBaseQueryResponse query(KnowledgeBaseQueryRequest request) {
+    public KnowledgeBaseQueryResponse query(KnowledgeBaseQueryRequest request, String userId) {
         if (request.knowledgeBaseIds() == null || request.knowledgeBaseIds().isEmpty()) {
             throw new BusinessException("KNOWLEDGE_BASE_IDS_REQUIRED", "请选择至少一个知识库");
         }
         List<String> ids = request.knowledgeBaseIds().stream().map(String::valueOf).toList();
         AgentResponse response = agentGateway.searchRag(new AgentRagRequest(
                 "v1", UUID.randomUUID().toString(), UUID.randomUUID().toString(),
-                "system", "kb-query", "rag.search", request.question(), ids,
+                identity.require(userId), "kb-query", "rag.search", request.question(), ids,
                 "KNOWLEDGE_BASE_QUERY"));
         if (response.code() < 100 || response.code() >= 200) {
             throw new BusinessException("RAG_QUERY_FAILED", "下层 RAG 检索失败");
         }
-        ids.forEach(persistence::incrementQuestionCount);
+        ids.forEach(id -> persistence.incrementQuestionCount(required(id, userId).getId()));
         return new KnowledgeBaseQueryResponse(
-                extractAnswer(response.answer()),
+                extractAgentAnswer(response.answer()),
                 request.knowledgeBaseIds().getFirst(),
-                required(ids.getFirst()).getName());
+                required(ids.getFirst(), userId).getName());
     }
 
-    public void revectorize(long id) {
-        KnowledgeBaseEntity entity = required(Long.toString(id));
-        indexWorker.index(entity);
+    public void revectorize(long id, String userId) {
+        KnowledgeBaseEntity entity = required(Long.toString(id), userId);
+        indexWorker.index(entity.getId(), identity.require(userId));
     }
 
-    private String extractAnswer(String raw) {
-        try {
-            List<Map<String, Object>> chunks = objectMapper.readValue(raw, new TypeReference<>() { });
-            return chunks.stream().map(item -> String.valueOf(item.get("content")))
-                    .reduce((left, right) -> left + "\n\n---\n\n" + right).orElse("未检索到相关资料");
-        } catch (Exception error) {
-            throw new BusinessException("RAG_RESPONSE_INVALID", "下层 RAG 返回格式无效");
+    private String extractAgentAnswer(String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw new BusinessException("RAG_RESPONSE_INVALID", "lower RAG returned an empty answer");
         }
+        // Python Agent 已经基于证据生成答案，Java 不解析或拼接命中 chunk。
+        return raw;
     }
 
-    private KnowledgeBaseEntity required(String id) {
-        return repository.findById(id)
+    public KnowledgeBaseEntity required(String id, String userId) {
+        KnowledgeBaseEntity entity = repository.findById(id)
                 .orElseThrow(() -> new BusinessException("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在"));
+        if (!identity.require(userId).equals(entity.getOwnerId())) {
+            throw new BusinessException("KNOWLEDGE_BASE_ACCESS_DENIED", "无权访问该知识库");
+        }
+        return entity;
     }
 
     private KnowledgeBaseView toView(KnowledgeBaseEntity entity) {

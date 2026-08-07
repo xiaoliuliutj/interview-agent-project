@@ -35,6 +35,7 @@ public class InterviewTaskEntity {
     public void running() { status = InterviewTaskStatus.RUNNING; updatedAt = Instant.now(); }
     public void complete(String sessionId) { status = InterviewTaskStatus.COMPLETED; this.sessionId = sessionId; updatedAt = Instant.now(); }
     public void fail(String errorMessage) { status = InterviewTaskStatus.FAILED; this.errorMessage = errorMessage; updatedAt = Instant.now(); }
+    public boolean isCompleted() { return status == InterviewTaskStatus.COMPLETED; }
     public String getId() { return id; }
     public InterviewTaskStatus getStatus() { return status; }
     public String getSessionId() { return sessionId; }

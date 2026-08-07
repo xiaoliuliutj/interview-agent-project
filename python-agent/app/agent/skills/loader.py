@@ -45,6 +45,29 @@ class SkillRegistry:
             allowed_tools=tuple(metadata.get("allowedTools", [])),
         )
 
+    def select_for_interview(
+        self, *, target_role: str, jd_text: str, requested_skill_id: str | None = None
+    ) -> tuple[SkillDefinition, ...]:
+        """由下层 Agent 根据职位选择 Skill；上层只传递职位/JD 快照。"""
+        normalized = f"{target_role}\n{jd_text}".lower()
+        selected = [self.get("interview-coach")]
+        if requested_skill_id and requested_skill_id != "custom":
+            requested = self.get(requested_skill_id)
+            if requested.skill_id != "interview-coach":
+                selected.append(requested)
+        # 预留按领域扩展的目录选择，当前项目只内置通用面试 Skill。
+        for skill_id in ("java-backend", "python-backend", "system-design", "algorithm"):
+            skill_dir = self._root / skill_id
+            if skill_dir.exists() and any(token in normalized for token in skill_id.split("-")):
+                selected.append(self.get(skill_id))
+        unique: dict[str, SkillDefinition] = {item.skill_id: item for item in selected}
+        return tuple(unique.values())
+
+    def instructions_for_interview(self, *, target_role: str, jd_text: str) -> tuple[str, ...]:
+        return tuple(item.instructions for item in self.select_for_interview(
+            target_role=target_role, jd_text=jd_text
+        ))
+
     def public_catalog(self) -> list[dict[str, object]]:
         """读取供上层展示的 Skill 目录；不暴露 SKILL.md 的内部指令。"""
         catalog_path = self._root / "catalog.json"

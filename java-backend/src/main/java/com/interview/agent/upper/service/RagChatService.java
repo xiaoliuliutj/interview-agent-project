@@ -12,8 +12,9 @@ import com.interview.agent.upper.domain.RagChatSessionEntity;
 import com.interview.agent.upper.repository.RagChatMessageRepository;
 import com.interview.agent.upper.repository.RagChatSessionRepository;
 import jakarta.transaction.Transactional;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import java.time.Duration;
 
 import java.util.Comparator;
 import java.util.List;
@@ -29,29 +30,33 @@ public class RagChatService {
     private final RagChatSessionRepository sessionRepository;
     private final RagChatMessageRepository messageRepository;
     private final KnowledgeBaseService knowledgeBaseService;
-    private final String demoUserId;
+    private final UserIdentityResolver identity;
+    private final StringRedisTemplate redisTemplate;
 
     public RagChatService(
             RagChatSessionRepository sessionRepository,
             RagChatMessageRepository messageRepository,
             KnowledgeBaseService knowledgeBaseService,
-            @Value("${agent.demo-user-id}") String demoUserId) {
+            UserIdentityResolver identity,
+            StringRedisTemplate redisTemplate) {
         this.sessionRepository = sessionRepository;
         this.messageRepository = messageRepository;
         this.knowledgeBaseService = knowledgeBaseService;
-        this.demoUserId = demoUserId;
+        this.identity = identity;
+        this.redisTemplate = redisTemplate;
     }
 
     @Transactional
-    public RagChatSessionView create(List<Long> knowledgeBaseIds, String title) {
-        List<Long> ids = normalizeKnowledgeBaseIds(knowledgeBaseIds);
-        RagChatSessionEntity session = sessionRepository.save(
-                new RagChatSessionEntity(demoUserId, title, ids));
+    public RagChatSessionView create(String userId, List<Long> knowledgeBaseIds, String title) {
+        String owner = identity.require(userId);
+        List<Long> ids = normalizeKnowledgeBaseIds(knowledgeBaseIds, owner);
+        RagChatSessionEntity session = sessionRepository.save(new RagChatSessionEntity(owner, title, ids));
         return toSessionView(session);
     }
 
-    public List<RagChatSessionListItemView> list() {
-        return sessionRepository.findByUserIdOrderByUpdatedAtDesc(demoUserId).stream()
+    public List<RagChatSessionListItemView> list(String userId) {
+        String owner = identity.require(userId);
+        return sessionRepository.findByUserIdOrderByUpdatedAtDesc(owner).stream()
                 .sorted(Comparator.<RagChatSessionEntity, Boolean>comparing(RagChatSessionEntity::isPinned)
                         .reversed()
                         .thenComparing(RagChatSessionEntity::getUpdatedAt, Comparator.reverseOrder()))
@@ -59,10 +64,10 @@ public class RagChatService {
                 .toList();
     }
 
-    public RagChatSessionDetailView detail(Long sessionId) {
-        RagChatSessionEntity session = required(sessionId);
+    public RagChatSessionDetailView detail(Long sessionId, String userId) {
+        RagChatSessionEntity session = required(sessionId, userId);
         List<KnowledgeBaseView> knowledgeBases = session.getKnowledgeBaseIdList().stream()
-                .map(this::findKnowledgeBaseOrNull)
+                .map(id -> findKnowledgeBaseOrNull(id, session.getUserId()))
                 .filter(item -> item != null)
                 .toList();
         List<RagChatMessageView> messages = messageRepository.findBySessionIdOrderByCreatedAt(sessionId)
@@ -73,27 +78,28 @@ public class RagChatService {
     }
 
     @Transactional
-    public void updateTitle(Long sessionId, String title) {
+    public void updateTitle(Long sessionId, String userId, String title) {
         if (title == null || title.isBlank()) {
             throw new BusinessException("RAG_CHAT_TITLE_REQUIRED", "会话标题不能为空");
         }
-        RagChatSessionEntity session = required(sessionId);
+        RagChatSessionEntity session = required(sessionId, userId);
         session.updateTitle(title.strip());
     }
 
     @Transactional
-    public void updateKnowledgeBases(Long sessionId, List<Long> knowledgeBaseIds) {
-        required(sessionId).updateKnowledgeBases(normalizeKnowledgeBaseIds(knowledgeBaseIds));
+    public void updateKnowledgeBases(Long sessionId, String userId, List<Long> knowledgeBaseIds) {
+        String owner = identity.require(userId);
+        required(sessionId, owner).updateKnowledgeBases(normalizeKnowledgeBaseIds(knowledgeBaseIds, owner));
     }
 
     @Transactional
-    public void togglePin(Long sessionId) {
-        required(sessionId).togglePin();
+    public void togglePin(Long sessionId, String userId) {
+        required(sessionId, userId).togglePin();
     }
 
     @Transactional
-    public void delete(Long sessionId) {
-        RagChatSessionEntity session = required(sessionId);
+    public void delete(Long sessionId, String userId) {
+        RagChatSessionEntity session = required(sessionId, userId);
         messageRepository.deleteBySessionId(session.getId());
         sessionRepository.delete(session);
     }
@@ -102,20 +108,27 @@ public class RagChatService {
      * 保证用户消息先落库，随后才调用 Python RAG。下层失败时保留问题供用户重试，
      * 但不伪造一条 assistant 回复。
      */
-    public String answer(Long sessionId, String question) {
-        RagChatSessionEntity session = required(sessionId);
+    public String answer(Long sessionId, String userId, String question) {
+        RagChatSessionEntity session = required(sessionId, userId);
         String normalizedQuestion = question == null ? "" : question.strip();
         if (normalizedQuestion.isEmpty()) {
             throw new BusinessException("RAG_CHAT_QUESTION_REQUIRED", "问题不能为空");
         }
         List<Long> knowledgeBaseIds = session.getKnowledgeBaseIdList();
-        normalizeKnowledgeBaseIds(knowledgeBaseIds);
+        normalizeKnowledgeBaseIds(knowledgeBaseIds, session.getUserId());
         messageRepository.save(new RagChatMessageEntity(sessionId, "user", normalizedQuestion));
-
+        String cacheKey = "rag:answer:" + session.getUserId() + ":" + sessionId + ":" + knowledgeBaseIds + ":"
+                + normalizedQuestion.toLowerCase();
+        String cached = redisTemplate.opsForValue().get(cacheKey);
+        if (cached != null && !cached.isBlank()) {
+            messageRepository.save(new RagChatMessageEntity(sessionId, "assistant", cached));
+            return cached;
+        }
         // 外部服务调用不包在 @Transactional 中，避免占用连接或把失败的外部调用回滚成重复问答。
         KnowledgeBaseQueryResponse ragResponse = knowledgeBaseService.query(
-                new KnowledgeBaseQueryRequest(knowledgeBaseIds, normalizedQuestion));
+                new KnowledgeBaseQueryRequest(knowledgeBaseIds, normalizedQuestion), session.getUserId());
         String answer = ragResponse.answer();
+        redisTemplate.opsForValue().set(cacheKey, answer, Duration.ofMinutes(5));
 
         messageRepository.save(new RagChatMessageEntity(sessionId, "assistant", answer));
         session.touch();
@@ -123,7 +136,7 @@ public class RagChatService {
         return answer;
     }
 
-    private List<Long> normalizeKnowledgeBaseIds(List<Long> knowledgeBaseIds) {
+    private List<Long> normalizeKnowledgeBaseIds(List<Long> knowledgeBaseIds, String userId) {
         if (knowledgeBaseIds == null || knowledgeBaseIds.isEmpty()) {
             throw new BusinessException("KNOWLEDGE_BASE_IDS_REQUIRED", "请选择至少一个知识库");
         }
@@ -131,19 +144,20 @@ public class RagChatService {
         if (ids.stream().anyMatch(id -> id == null || id <= 0)) {
             throw new BusinessException("KNOWLEDGE_BASE_ID_INVALID", "知识库编号不合法");
         }
-        ids.forEach(id -> knowledgeBaseService.get(id));
+        ids.forEach(id -> knowledgeBaseService.get(id, userId));
         return ids;
     }
 
-    private RagChatSessionEntity required(Long sessionId) {
+    private RagChatSessionEntity required(Long sessionId, String userId) {
+        String owner = identity.require(userId);
         return sessionRepository.findById(sessionId)
-                .filter(session -> demoUserId.equals(session.getUserId()))
+                .filter(session -> owner.equals(session.getUserId()))
                 .orElseThrow(() -> new BusinessException("RAG_CHAT_SESSION_NOT_FOUND", "知识库问答会话不存在"));
     }
 
-    private KnowledgeBaseView findKnowledgeBaseOrNull(long knowledgeBaseId) {
+    private KnowledgeBaseView findKnowledgeBaseOrNull(long knowledgeBaseId, String userId) {
         try {
-            return knowledgeBaseService.get(knowledgeBaseId);
+            return knowledgeBaseService.get(knowledgeBaseId, userId);
         } catch (BusinessException ignored) {
             // 已删除的知识库不能阻断历史聊天记录展示。
             return null;
@@ -157,7 +171,7 @@ public class RagChatService {
 
     private RagChatSessionListItemView toListItem(RagChatSessionEntity entity) {
         List<String> names = entity.getKnowledgeBaseIdList().stream()
-                .map(this::findKnowledgeBaseOrNull)
+                .map(id -> findKnowledgeBaseOrNull(id, entity.getUserId()))
                 .filter(item -> item != null)
                 .map(KnowledgeBaseView::name)
                 .toList();

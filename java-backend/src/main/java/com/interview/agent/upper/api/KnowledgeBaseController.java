@@ -18,12 +18,12 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
@@ -47,8 +47,9 @@ public class KnowledgeBaseController {
     public ApiResult<Map<String, Object>> upload(
             @RequestPart("file") MultipartFile file,
             @RequestPart(value = "name", required = false) String name,
-            @RequestPart(value = "category", required = false) String category) throws IOException {
-        KnowledgeBaseView view = service.upload(file, name, category);
+            @RequestPart(value = "category", required = false) String category,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) throws IOException {
+        KnowledgeBaseView view = service.upload(file, name, category, userId);
         return ApiResult.success(Map.of(
                 "knowledgeBase", Map.of(
                         "id", view.id(), "name", view.name(), "category", view.category() == null ? "" : view.category(),
@@ -58,50 +59,71 @@ public class KnowledgeBaseController {
     }
 
     @GetMapping("/list")
-    public ApiResult<List<KnowledgeBaseView>> list() { return ApiResult.success(service.list()); }
+    public ApiResult<List<KnowledgeBaseView>> list(
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return ApiResult.success(service.list(userId));
+    }
 
     @GetMapping("/{id}")
-    public ApiResult<KnowledgeBaseView> get(@PathVariable long id) { return ApiResult.success(service.get(id)); }
+    public ApiResult<KnowledgeBaseView> get(@PathVariable long id,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return ApiResult.success(service.get(id, userId));
+    }
 
     /** 保留前端下载入口，直接返回 Java 上层持久化的原始文本内容。 */
     @GetMapping("/{id}/download")
-    public ResponseEntity<byte[]> download(@PathVariable long id) {
-        KnowledgeBaseService.DownloadedDocument document = service.download(id);
+    public ResponseEntity<byte[]> download(@PathVariable long id,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        KnowledgeBaseService.DownloadedDocument document = service.download(id, userId);
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType(document.contentType()))
                 .header(HttpHeaders.CONTENT_DISPOSITION,
                         "attachment; filename=\"" + document.filename() + "\"")
-                .body(document.content().getBytes(StandardCharsets.UTF_8));
+                .body(document.content());
     }
 
     @DeleteMapping("/{id}")
-    public ApiResult<Void> delete(@PathVariable long id) { service.delete(id); return ApiResult.success(null); }
+    public ApiResult<Void> delete(@PathVariable long id,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        service.delete(id, userId);
+        return ApiResult.success(null);
+    }
 
     @GetMapping("/categories")
-    public ApiResult<List<String>> categories() { return ApiResult.success(service.categories()); }
+    public ApiResult<List<String>> categories(
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return ApiResult.success(service.categories(userId));
+    }
 
     @GetMapping("/category/{category}")
-    public ApiResult<List<KnowledgeBaseView>> byCategory(@PathVariable String category) {
-        return ApiResult.success(service.byCategory(category));
+    public ApiResult<List<KnowledgeBaseView>> byCategory(@PathVariable String category,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return ApiResult.success(service.byCategory(category, userId));
     }
 
     @GetMapping("/uncategorized")
-    public ApiResult<List<KnowledgeBaseView>> uncategorized() { return ApiResult.success(service.uncategorized()); }
+    public ApiResult<List<KnowledgeBaseView>> uncategorized(
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return ApiResult.success(service.uncategorized(userId));
+    }
 
     @PutMapping("/{id}/category")
-    public ApiResult<Void> updateCategory(@PathVariable long id, @RequestBody Map<String, String> body) {
-        service.updateCategory(id, body.get("category"));
+    public ApiResult<Void> updateCategory(@PathVariable long id, @RequestBody Map<String, String> body,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        service.updateCategory(id, body.get("category"), userId);
         return ApiResult.success(null);
     }
 
     @GetMapping("/search")
-    public ApiResult<List<KnowledgeBaseView>> search(@RequestParam String keyword) {
-        return ApiResult.success(service.search(keyword));
+    public ApiResult<List<KnowledgeBaseView>> search(@RequestParam String keyword,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return ApiResult.success(service.search(keyword, userId));
     }
 
     @GetMapping("/stats")
-    public ApiResult<Map<String, Object>> stats() {
-        List<KnowledgeBaseView> items = service.list();
+    public ApiResult<Map<String, Object>> stats(
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        List<KnowledgeBaseView> items = service.list(userId);
         return ApiResult.success(Map.of(
                 "totalCount", items.size(),
                 "totalQuestionCount", items.stream().mapToLong(KnowledgeBaseView::questionCount).sum(),
@@ -111,23 +133,26 @@ public class KnowledgeBaseController {
     }
 
     @PostMapping("/{id}/revectorize")
-    public ApiResult<Void> revectorize(@PathVariable long id) {
-        service.revectorize(id);
+    public ApiResult<Void> revectorize(@PathVariable long id,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        service.revectorize(id, userId);
         return ApiResult.success(null);
     }
 
     @PostMapping("/query")
-    public ApiResult<KnowledgeBaseQueryResponse> query(@RequestBody KnowledgeBaseQueryRequest request) {
-        return ApiResult.success(service.query(request));
+    public ApiResult<KnowledgeBaseQueryResponse> query(@RequestBody KnowledgeBaseQueryRequest request,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return ApiResult.success(service.query(request, userId));
     }
 
     /** 保留原 React 的流式入口；当前下层检索完成后发送单个 SSE 结果。 */
     @PostMapping(value = "/query/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter queryStream(@RequestBody KnowledgeBaseQueryRequest request) {
+    public SseEmitter queryStream(@RequestBody KnowledgeBaseQueryRequest request,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MILLIS);
         executor.execute(() -> {
             try {
-                String answer = service.query(request).answer();
+                String answer = service.query(request, userId).answer();
                 emitter.send(SseEmitter.event().name("message")
                         .data(answer.replace("\n", "\\n").replace("\r", "\\r")));
                 emitter.complete();

@@ -3,6 +3,8 @@ package com.interview.agent.upper.agent.dto;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import java.util.List;
+import java.util.Map;
 
 public record AgentInitializeRequest(
         String apiVersion,
@@ -20,6 +22,8 @@ public record AgentInitializeRequest(
             String jdText,
             @NotBlank String targetRole,
             Integer interviewDurationMinutes,
-            String desiredDifficulty) {
+            String desiredDifficulty,
+            String requestedSkillId,
+            List<Map<String, Object>> customCategories) {
     }
 }

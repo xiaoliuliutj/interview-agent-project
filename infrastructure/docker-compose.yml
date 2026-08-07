@@ -20,6 +20,17 @@ services:
     volumes:
       - redis-data:/data
 
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-interview}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD in .env}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   python-agent:
     build:
       context: ../python-agent
@@ -52,7 +63,15 @@ services:
       DATABASE_USERNAME: ${POSTGRES_USER:-interview}
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
       REDIS_URL: redis://redis:6379
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-interview}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       PYTHON_AGENT_BASE_URL: http://python-agent:8000
+      AGENT_FILE_STORAGE_ROOT: /app/data/files
+      AGENT_PDF_FONT_PATH: /app/fonts/NotoSansCJKsc-Regular.otf
+    volumes:
+      - java-files:/app/data
+      - ./fonts:/app/fonts:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,6 +79,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      rabbitmq:
+        condition: service_healthy
     ports:
       - "8080:8080"
 
@@ -75,3 +96,4 @@ services:
 volumes:
   postgres-data:
   redis-data:
+  java-files:

@@ -16,6 +16,10 @@ class ResumeMemory(BaseModel):
     resume_text: str = ""
     jd_id: str | None = None
     jd_text: str = ""
+    analysis_summary: str = ""
+    analysis_questions: list[str] = Field(default_factory=list)
+    analysis_priorities: list[str] = Field(default_factory=list)
+    analysis_suggestions: list[str] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -28,6 +32,8 @@ class LongTermMemory(BaseModel):
     preferences: list[str] = Field(default_factory=list)
     weak_topics: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+    question_catalog: list[str] = Field(default_factory=list)
+    interview_summaries: list[str] = Field(default_factory=list)
     state_version: int = Field(default=0, ge=0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -42,6 +48,7 @@ class MemoryContext(BaseModel):
     preferences: list[str]
     weak_topics: list[str]
     notes: list[str]
+    question_catalog: list[str] = Field(default_factory=list)
 
     @classmethod
     def empty(cls, session: InterviewSession) -> "MemoryContext":
@@ -52,6 +59,7 @@ class MemoryContext(BaseModel):
             preferences=[],
             weak_topics=[],
             notes=[],
+            question_catalog=[],
         )
 
 
