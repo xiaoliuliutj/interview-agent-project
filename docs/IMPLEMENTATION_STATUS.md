@@ -20,7 +20,7 @@ Java 不保存 Python Agent 的 Prompt、Skill、RAG 决策或记忆上下文。
 | --- | --- | --- |
 | 配置、契约、异常 | `app/core/` | 配置来自 `.env`/JSON；响应统一为 `AgentResponse`；业务码按首位分类 |
 | 面试 Agent | `app/agent/interview/` | InterviewPlan、六阶段状态机、受约束决策和状态版本 |
-| 双层记忆 | `app/agent/memory/` | 最近 5 轮短期窗口；用户级长期摘要、简历快照、偏好和薄弱点 |
+| 双层记忆 | `app/agent/memory/` | 默认最近 5 轮短期窗口（配置允许 3～5）；用户级长期摘要、简历快照、偏好和薄弱点 |
 | MCP 参考工具 | `app/agent/mcp/` | 只读查询外置面试基础资料；stdio 启动，受长度和结果数量限制 |
 | 简历评价 Agent | `app/agent/evaluation/` | RAG 可选证据、结构化评分、总结、优势和建议；Java 异步持久化结果 |
 | RAG | `app/agent/rag/` | 默认 800 Token 无重叠切片、批量 10、pgvector 检索、KB 过滤与本地回退 |
@@ -33,6 +33,7 @@ Java 不保存 Python Agent 的 Prompt、Skill、RAG 决策或记忆上下文。
 ## 3. Java 上层已落地能力
 
 - `InterviewService` 负责用户、候选人、简历、JD 的业务校验和面试业务会话。
+- 简历上传由 Java 使用 Apache Tika 提取文本后再提交评价任务，避免把 PDF/DOCX 二进制内容直接当作 UTF-8 文本交给下层。
 - `PythonAgentGateway` 负责固定 JSON 调用，不在 Java 重复实现 Agent。
 - 下层问答响应的 `output.evaluationSummary`、`action` 和 `stage` 由 Java 持久化到面试轮次；它们是可展示 Agent 结果，不包含模型思维链。
 - `AgentCallExecutor` 负责有限重试；仅网络异常和下层可重试 5xx 重试。
@@ -40,7 +41,7 @@ Java 不保存 Python Agent 的 Prompt、Skill、RAG 决策或记忆上下文。
 - 文字面试兼容层已持久化会话列表、未完成会话恢复、答案草稿、提前结束、删除和问答历史；草稿不调用下层，正式答案才调用 Python Agent。
 - 提前结束通过 `agent.session.complete` 同步关闭下层会话；关闭请求不带问答上下文，且不会删除按用户保留的长期记忆。
 - `InterviewTaskEntity`、`InterviewAsyncWorker` 和线程池展示持久化异步任务生命周期。
-- `LegacyInterviewController` 保留 React 原有的核心面试/简历上传路径，并通过 Facade 转换为新领域 DTO；`KnowledgeBaseController`、`RagChatController` 和 `InterviewScheduleController` 已提供旧路径适配。语音面试仍是说明书中定义的后续扩展，不纳入首期核心链路。
+- `LegacyInterviewController` 保留 React 原有的核心面试/简历上传路径，并通过 Facade 转换为新领域 DTO；已补充简历导出、面试导出和知识库下载入口，首期返回 UTF-8 文本而不是伪造生产级 PDF。`KnowledgeBaseController`、`RagChatController` 和 `InterviewScheduleController` 已提供旧路径适配。语音面试仍是说明书中定义的后续扩展，不纳入首期核心链路。
 
 Java 源码尚未运行 Maven 编译/测试：当前 `D:\Maven\apache-maven-3.9.16` 是源码目录，缺少 `bin/mvn.cmd`，系统也未提供可用 JDK。环境补齐后必须执行编译、Gateway 契约测试、并发测试和异步任务测试。
 
@@ -69,7 +70,7 @@ React
 使用 `D:\Anaconda\envs\inter-guide\python.exe` 执行：
 
 ```text
-python -m pytest tests -q       23 passed
+python -m pytest tests -q       24 passed
 python -m compileall -q app     通过
 ```
 
