@@ -35,6 +35,7 @@ RAG 只开放 `QUESTION_GENERATION` 和 `RESUME_EVALUATION` 两种用途。Embed
 - `AgentCallExecutor` 负责有限重试；仅网络异常和下层可重试 5xx 重试。
 - `InterviewSessionEntity` 使用 JPA `@Version`，`InterviewSessionPersistenceService` 负责事务边界和并发版本校验。
 - `InterviewTaskEntity`、`InterviewAsyncWorker` 和线程池展示持久化异步任务生命周期。
+- `LegacyInterviewController` 保留 React 原有的核心面试/简历上传路径，并通过 Facade 转换为新领域 DTO；知识库管理、语音面试和排期页面的完整旧接口仍应在后续垂直切片中逐项迁移，不能把当前占位响应当作已完成业务。
 
 Java 源码尚未运行 Maven 编译/测试：当前 `D:\Maven\apache-maven-3.9.16` 是源码目录，缺少 `bin/mvn.cmd`，系统也未提供可用 JDK。环境补齐后必须执行编译、Gateway 契约测试、并发测试和异步任务测试。
 
