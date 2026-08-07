@@ -83,7 +83,7 @@ app/
 
 `InterviewDecisionAgent` 根据当前问题、候选人回答、阶段计划和近期问答记录返回结构化决策。它只能返回 `FOLLOW_UP`、`NEXT_QUESTION`、`NEXT_STAGE` 或 `END_INTERVIEW`；`InterviewAgentService` 根据轮次上限校验动作后再变更状态，模型不能绕过流程约束。
 
-当前版本未接入 Tools 和 RAG，因此 ReAct 中的工具调用分支尚未开放；“观察”来自候选人回答、短期会话记忆和长期用户记忆。长期记忆的首期实现使用结构化摘要与版本化简历快照，暂不使用向量记忆或自动事实抽取。
+当前版本已为 Planner 和 Decision Agent 接入受策略约束的 RAG Tool；“观察”同时来自候选人回答、短期会话记忆、长期用户记忆和可选检索证据。长期记忆首期使用结构化摘要与版本化简历快照，暂不使用向量记忆或自动事实抽取。
 
 ### 双层记忆边界
 
@@ -145,7 +145,7 @@ app/
 
 - `app/agent/rag/` 负责文档解析、800 Token 无重叠切片、每批最多 10 个分片的向量化、知识库过滤和相似度检索。
 - 优先让向量仓库执行 `knowledgeBaseId` 过滤；底层不支持时，按原项目思路扩大候选集并在服务层做本地过滤和 `topK/minScore` 收口。
-- RAG 仅允许 `QUESTION_GENERATION` 与 `RESUME_EVALUATION` 两种用途，并由外部 `config/rag/rag-policy.json` 控制。它向 Planner 和 Decision Agent 提供证据，不直接输出页面或取代长期记忆。
+- 面试 Agent 的 RAG 仅使用 `QUESTION_GENERATION` 与 `RESUME_EVALUATION`；原 React 知识库页面使用单独的 `KNOWLEDGE_BASE_QUERY` 检索验证用途。三者均由外部 `config/rag/rag-policy.json` 控制，知识库页面不参与面试 Agent 决策，也不取代长期记忆。
 - 已提供 PostgreSQL/pgvector 仓库；真实索引和检索需要配置 `DATABASE_URL`、`EMBEDDING_MODEL` 及可用的 Embedding 服务。
 
 ### PostgreSQL 集成测试待补充

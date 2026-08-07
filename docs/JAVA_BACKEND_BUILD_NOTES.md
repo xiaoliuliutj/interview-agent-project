@@ -34,6 +34,7 @@
 
 - `KnowledgeBaseService` 只保存知识库元数据和原文，`KnowledgeBaseIndexWorker` 异步调用 Python 的 `rag.index`；Java 不实现切片或向量相似度。
 - 知识库查询通过 Python 的 `rag.search` 获取片段，再由 Java 组装原 React 所需的兼容响应。
+- `RagChatService` 只管理知识库问答会话、消息、置顶和删除；`RagChatController` 用 `SseEmitter` 返回一次检索结果。它使用独立的 `KNOWLEDGE_BASE_QUERY` 用途，不把页面查询伪装成面试 Agent 的出题或简历评价。
 - `InterviewScheduleService` 是纯 Java 的排期 CRUD 和状态流转，解析只做轻量文本首行提取；需要语义解析时再提交 Python Agent 任务。
 
 ## 4. 工程化专题
