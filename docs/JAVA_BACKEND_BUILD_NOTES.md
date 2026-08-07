@@ -53,3 +53,4 @@
 - 用户提供的 `D:\\Maven\\apache-maven-3.9.16` 当前是 Maven 源码目录，不是包含可执行 `bin\\mvn.cmd` 的 Maven 发布版。
 - 当前 `java` / `javac` 命令不可用，Java 上层暂不运行测试。
 - 后续需要先准备可用 JDK 17 或 21，以及 Maven 发布版或项目 Maven Wrapper，再开始 Java 构建和测试。
+- PostgreSQL 初始化脚本使用 `TEXT` 保存简历、JD、问答、评价、知识库原文和排期文本；对应实体显式使用 `@Column(columnDefinition = "TEXT")`，避免 PostgreSQL 下 `@Lob` 的 OID/CLOB 校验差异。

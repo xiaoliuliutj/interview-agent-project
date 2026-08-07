@@ -42,6 +42,8 @@ Java 不保存 Python Agent 的 Prompt、Skill、RAG 决策或记忆上下文。
 
 Java 源码尚未运行 Maven 编译/测试：当前 `D:\Maven\apache-maven-3.9.16` 是源码目录，缺少 `bin/mvn.cmd`，系统也未提供可用 JDK。环境补齐后必须执行编译、Gateway 契约测试、并发测试和异步任务测试。
 
+部署资产已静态核对：Java 长文本实体显式映射为 PostgreSQL `TEXT`，避免 `@Lob` 与初始化脚本类型不一致；Compose 会等待 Python `/health` 通过后启动 Java，Nginx 对 `/api/` 关闭响应缓冲以支持 SSE。当前本机没有 Docker，未执行容器构建或启动验证。
+
 ## 4. 上下层关键链路
 
 ```text
