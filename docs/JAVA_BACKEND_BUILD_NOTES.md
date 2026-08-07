@@ -12,15 +12,33 @@
 
 后续按模块追加：功能目标、实现方案、关键流程、数据与接口边界、工程化考虑、验证方式、面试表达要点和可改进项。
 
-## 3. 工程化专题
+## 3. 已实现：上层骨架
+
+### 业务与持久化
+
+- 新建 Maven/Spring Boot 项目，包含候选人、简历、JD、面试会话、面试轮次和异步任务实体与仓库。
+- `InterviewService` 在 Java 校验用户、候选人、简历与 JD 的归属关系；仅初始化时向 Python 发送资料快照，普通问答不转发上下文。
+- `InterviewSessionEntity` 使用 `@Version`，会话更新前额外校验版本，发生竞争时明确返回并发修改错误，不静默覆盖。
+
+### Python Agent Gateway
+
+- `PythonAgentGateway` 只调用 Python 的初始化与问答接口，复用约定的 `AgentResponse`；Java 中没有 Agent Prompt、Skill 或 RAG 决策代码。
+- `AgentCallExecutor` 只对网络异常和下层可重试的 5xx 业务码做有限重试；参数错误、数据一致性错误不会被重试。
+
+### 异步任务
+
+- `InterviewTaskEntity` 先持久化任务状态，再由独立的 `InterviewAsyncWorker` 在线程池中调用业务服务；可展示 `PENDING/RUNNING/COMPLETED/FAILED` 生命周期。
+- 当前为单体首期实现；后续虚拟机部署和多实例运行时，可将 Worker 触发替换为 Redis Stream/消息队列，并采用 Outbox 保证任务事件不丢失。
+
+## 4. 工程化专题
 
 后续沉淀事务与一致性、并发与幂等、异步任务、服务失败处理、可观测性、配置与部署等实践。
 
-## 4. 踩坑与解决记录
+## 5. 踩坑与解决记录
 
 暂无。发现真实问题后按“现象 → 根因 → 解决措施 → 预防约束”补充。
 
-## 5. 当前 Java 环境
+## 6. 当前 Java 环境
 
 - 用户提供的 `D:\\Maven\\apache-maven-3.9.16` 当前是 Maven 源码目录，不是包含可执行 `bin\\mvn.cmd` 的 Maven 发布版。
 - 当前 `java` / `javac` 命令不可用，Java 上层暂不运行测试。

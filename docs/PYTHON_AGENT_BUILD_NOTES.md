@@ -129,6 +129,20 @@ app/
 - 解决措施：已添加 `pytest.ini`，将默认作用域显式设为 `function`。
 - 预防约束：后续异步测试沿用统一 pytest 配置，避免测试行为随依赖版本变化。
 
+### HTTP API 与依赖组装
+
+- 新增 `app/api/application.py`：提供 `/health`、`/v1/agent/sessions/initialize`、`/v1/agent/respond`。
+- 初始化请求才允许传候选人、简历和 JD 快照；普通问答只传 `userId`、`sessionId`、`runId` 和用户回答。
+- FastAPI 校验错误、下层业务异常和未预期异常都转换为同一 `AgentResponse` 字段集合；HTTP 状态码不替代三位业务码。
+- `app/bootstrap.py` 只在配置了 PostgreSQL 时组装生产服务，不回退为临时文件或内存数据。
+
+### RAG：原项目逻辑的下层迁移
+
+- `app/agent/rag/` 负责文档解析、800 Token 无重叠切片、每批最多 10 个分片的向量化、知识库过滤和相似度检索。
+- 优先让向量仓库执行 `knowledgeBaseId` 过滤；底层不支持时，按原项目思路扩大候选集并在服务层做本地过滤和 `topK/minScore` 收口。
+- RAG 仅允许 `QUESTION_GENERATION` 与 `RESUME_EVALUATION` 两种用途，并由外部 `config/rag/rag-policy.json` 控制。它向 Planner 和 Decision Agent 提供证据，不直接输出页面或取代长期记忆。
+- 已提供 PostgreSQL/pgvector 仓库；真实索引和检索需要配置 `DATABASE_URL`、`EMBEDDING_MODEL` 及可用的 Embedding 服务。
+
 ### PostgreSQL 集成测试待补充
 
 - 现象：基础流程单元测试通过，但本地未提供 `DATABASE_URL`，无法执行真实的 PostgreSQL 建表、读写和乐观锁集成测试。
