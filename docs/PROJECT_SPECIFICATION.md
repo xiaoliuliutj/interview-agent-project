@@ -310,12 +310,19 @@ Java 负责跨业务的事务、异步任务、业务幂等、并发和最终结
   "sessionStatus": "ACTIVE",
   "stateVersion": 4,
   "answer": "请进一步说明 Redis 缓存与数据库一致性如何保证。",
+  "output": {
+    "evaluationSummary": "回答方向正确，但还需要说明写入顺序。",
+    "action": "FOLLOW_UP",
+    "stage": "FUNDAMENTAL"
+  },
   "error": null,
   "timestamp": "2026-08-07T10:05:04Z"
 }
 ```
 
 业务码固定三位：`1xx` 正常/部分结果，`2xx` 请求错误，`3xx` 数据一致性，`4xx` 流量保护，`5xx` 模型/网络/工具依赖错误。
+
+`output` 在所有响应中固定存在；没有可展示结构化结果时为 `null`。首期只允许返回评价摘要、受约束动作和当前阶段，禁止返回模型推理过程。Java 将评价摘要作为业务问答历史的一部分持久化，用于后续报告页面。
 
 ## 9. 关键调用时序
 

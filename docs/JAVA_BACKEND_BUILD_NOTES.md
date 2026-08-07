@@ -26,6 +26,7 @@
 
 - `PythonAgentGateway` 只调用 Python 的初始化与问答接口，复用约定的 `AgentResponse`；Java 中没有 Agent Prompt、Skill 或 RAG 决策代码。
 - `AgentCallExecutor` 只对网络异常和下层可重试的 5xx 业务码做有限重试；参数错误、数据一致性错误不会被重试。
+- `AgentResponse.output` 只接收可展示的 `evaluationSummary`、`action`、`stage`；Java 将评价摘要写入业务轮次，报告读模型从这些持久化轮次组装，不解析模型自由文本或保存思维链。
 
 ### 异步任务
 

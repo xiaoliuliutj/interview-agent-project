@@ -37,7 +37,7 @@ app/
 
 ### 交互契约类
 
-`app/core/contracts.py` 定义 `AgentRequest`、`AgentResponse` 和 `ErrorInfo`。请求只包含身份、运行标识和用户问题，下层根据 `userId + sessionId` 自己维护上下文；响应成功和失败使用相同字段集合，业务码遵循三位首位分类规范。
+`app/core/contracts.py` 定义 `AgentRequest`、`AgentResponse` 和 `ErrorInfo`。请求只包含身份、运行标识和用户问题，下层根据 `userId + sessionId` 自己维护上下文；响应成功和失败使用相同字段集合，业务码遵循三位首位分类规范。问答响应的 `output` 仅返回受控的评价摘要、动作和阶段，禁止返回思维链。
 
 ### 异常处理类
 

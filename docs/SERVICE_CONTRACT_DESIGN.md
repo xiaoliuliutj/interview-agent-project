@@ -139,6 +139,11 @@ FastAPI 的异步请求处理、数据库连接池和模型客户端的并发请
   "sessionStatus": "ACTIVE",
   "stateVersion": 4,
   "answer": "RDB 是定期生成内存快照，恢复速度较快但可能丢失最近数据；AOF 记录写命令，数据可靠性更高，但文件通常更大。",
+  "output": {
+    "evaluationSummary": "回答覆盖了两种持久化方式的核心差异。",
+    "action": "NEXT_QUESTION",
+    "stage": "FUNDAMENTAL"
+  },
   "error": null,
   "timestamp": "2026-08-06T12:00:04Z"
 }
@@ -170,6 +175,7 @@ FastAPI 的异步请求处理、数据库连接池和模型客户端的并发请
   "sessionStatus": "ACTIVE",
   "stateVersion": 4,
   "answer": null,
+  "output": null,
   "error": {
     "type": "AGENT_EXECUTION_FAILED",
     "message": "Agent 暂时无法完成本次处理",
@@ -181,7 +187,7 @@ FastAPI 的异步请求处理、数据库连接池和模型客户端的并发请
 
 `code` 是业务结果码，不替代 HTTP 状态码；例如 HTTP 200 也可以携带处理中或业务失败结果，便于上层稳定解析 Agent 执行结果。正式实现时，Java DTO、Python Pydantic 模型和契约测试必须以本节为唯一来源。
 
-成功、处理中、部分结果和失败必须使用完全相同的响应字段集合，不能通过删字段或更换 JSON 层级表达状态差异。上层只根据 `code`、`status`、`sessionStatus`、`answer` 和 `error` 的值解析结果；下层不返回 `nextQuestion` 等面试业务字段。
+成功、处理中、部分结果和失败必须使用完全相同的响应字段集合，不能通过删字段或更换 JSON 层级表达状态差异。上层根据 `code`、`status`、`sessionStatus`、`answer`、`output` 和 `error` 的值解析结果；`output` 仅承载受控、可展示的结构化结果（如评价摘要、动作和阶段），不返回模型思维链。下层不返回 `nextQuestion` 等上层页面业务字段。
 
 记忆的检索范围使用组合条件，而不是拼接 ID：短期记忆按 `(userId, sessionId)` 隔离，只保留最近 3–5 轮完整问答与当前会话状态；长期记忆按 `userId` 隔离，保存用户历史摘要、已确认的简历信息及其他长期有效信息。一次运行的状态和事件按 `runId` 管理。`agentId` 仅用于选择 Agent 配置，不作为记忆主键。
 

@@ -32,6 +32,7 @@ Java 不保存 Python Agent 的 Prompt、Skill、RAG 决策或记忆上下文。
 
 - `InterviewService` 负责用户、候选人、简历、JD 的业务校验和面试业务会话。
 - `PythonAgentGateway` 负责固定 JSON 调用，不在 Java 重复实现 Agent。
+- 下层问答响应的 `output.evaluationSummary`、`action` 和 `stage` 由 Java 持久化到面试轮次；它们是可展示 Agent 结果，不包含模型思维链。
 - `AgentCallExecutor` 负责有限重试；仅网络异常和下层可重试 5xx 重试。
 - `InterviewSessionEntity` 使用 JPA `@Version`，`InterviewSessionPersistenceService` 负责事务边界和并发版本校验。
 - 文字面试兼容层已持久化会话列表、未完成会话恢复、答案草稿、提前结束、删除和问答历史；草稿不调用下层，正式答案才调用 Python Agent。
@@ -64,7 +65,7 @@ React
 使用 `D:\Anaconda\envs\inter-guide\python.exe` 执行：
 
 ```text
-python -m pytest tests -q       18 passed
+python -m pytest tests -q       21 passed
 python -m compileall -q app     通过
 ```
 
