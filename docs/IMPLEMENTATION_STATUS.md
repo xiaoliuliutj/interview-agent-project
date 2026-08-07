@@ -22,6 +22,7 @@ Java 不保存 Python Agent 的 Prompt、Skill、RAG 决策或记忆上下文。
 | 面试 Agent | `app/agent/interview/` | InterviewPlan、六阶段状态机、受约束决策和状态版本 |
 | 双层记忆 | `app/agent/memory/` | 默认最近 5 轮短期窗口（配置允许 3～5）；用户级长期摘要、简历快照、偏好和薄弱点 |
 | MCP 参考工具 | `app/agent/mcp/` | 只读查询外置面试基础资料；stdio 启动，受长度和结果数量限制 |
+| Skill 目录适配 | `app/agent/skills/`、`SkillController` | Python 读取外置 Skill 目录并做确定性 JD 分类，Java 只代理给原 React 技能接口 |
 | 简历评价 Agent | `app/agent/evaluation/` | RAG 可选证据、结构化评分、总结、优势和建议；Java 异步持久化结果 |
 | RAG | `app/agent/rag/` | 默认 800 Token 无重叠切片、批量 10、pgvector 检索、KB 过滤与本地回退 |
 | HTTP 入口 | `app/api/application.py` | 健康检查、初始化、问答和统一异常响应 |
@@ -70,7 +71,7 @@ React
 使用 `D:\Anaconda\envs\inter-guide\python.exe` 执行：
 
 ```text
-python -m pytest tests -q       24 passed
+python -m pytest tests -q       25 passed
 python -m compileall -q app     通过
 ```
 

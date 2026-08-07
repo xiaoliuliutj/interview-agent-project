@@ -161,6 +161,14 @@ app/
   查询和长度边界。后续若接入远端 MCP Server，必须补充超时、失败映射、来源审计和
   工具白名单。
 
+### Skill 目录与 JD 预处理
+
+- `config/skills/catalog.json` 是面向前端展示的可修改 Skill 目录；`SKILL.md` 仍只供
+  Agent 内部加载，不通过接口暴露内部指令。
+- `SkillRegistry.categories_for_jd()` 根据目录中的关键词确定性提取分类，供原 React
+  的自定义 JD 页面使用。它不调用大模型，Java 只代理结果，避免上下层重复实现 Skill
+  选择逻辑。
+
 ### 简历评价 Agent
 
 - 新增 `app/agent/evaluation/` 和 `/v1/agent/evaluate/resume`，使用 `config/prompts/resume/analysis.md`、`resume-analyst` Skill 和可选 `RESUME_EVALUATION` 检索证据。

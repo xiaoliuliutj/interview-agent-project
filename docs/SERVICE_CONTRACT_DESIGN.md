@@ -193,6 +193,11 @@ FastAPI 的异步请求处理、数据库连接池和模型客户端的并发请
 
 普通问答请求仍禁止携带 `history`、`memory`、简历全文或 JD 全文。下层使用请求中的 `userId + sessionId` 自行读取这两层记忆；初始化请求才可携带资料快照，供下层建立本次会话与长期记忆索引。
 
+为兼容原 React 的技能选择页，下层还接受 `agent.skills.list` 和
+`agent.skills.parse-jd` 两个只读操作；它们复用同一响应信封，`question` 仅在解析操作中
+承载待分类的 JD 文本，处理过程使用外置关键词配置，不调用大模型。Java 只做鉴权、重试和
+结果转发，不复制 Skill 指令。
+
 当后续支持用户自定义 Agent 配置时，再增加独立的 `agentInstanceId` 或 `agentProfileId`。该实例仍然不应替代用户和会话标识。
 
 ## 4. 后续协议演进方向
