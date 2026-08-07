@@ -155,3 +155,9 @@ app/
 - 根因：下层数据库尚未配置。
 - 解决措施：后续提供 PostgreSQL 配置后，调用 `create_schema()` 并增加真实连接与并发更新测试。
 - 预防约束：持久化功能不能只以内存仓库测试为完成标准；接入数据库后必须补充集成测试。
+
+### 真实模型验证记录
+
+- 当前本地 `.env` 已配置 OpenAI-compatible 聊天模型，未输出任何 API Key、Base URL 或模型密钥内容。
+- 已实际发送固定连通问题并获得正确响应；随后在内存仓库中使用真实模型完成一次 `InterviewPlanner` 六阶段计划生成，以及一次 `InterviewDecisionAgent` 受约束决策。决策返回了有效动作、下一阶段和评价摘要。
+- 当前 `DATABASE_URL`、Embedding 模型及 Embedding 服务未配置，因此 PostgreSQL 持久化、真实向量索引与端到端 RAG 仍不能宣称已完成集成验证。

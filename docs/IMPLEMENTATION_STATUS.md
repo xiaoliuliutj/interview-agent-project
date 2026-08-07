@@ -71,6 +71,8 @@ python -m compileall -q app     通过
 
 测试覆盖：面试阶段推进、重复会话、短期/长期记忆、统一 API 响应、RAG 切片、Embedding 批次、知识库过滤回退。PostgreSQL、真实 Embedding、Java 和完整容器启动仍属于待环境补齐后的集成验证。
 
+真实模型验证：已使用当前本地 OpenAI-compatible 配置完成聊天连通、六阶段面试规划和单轮受约束 Decision Agent 决策验证；测试过程未输出敏感配置。数据库和 Embedding 未配置，因此上述验证不替代持久化/RAG 集成测试。
+
 ## 6. 虚拟机部署
 
 `infrastructure/docker-compose.yml` 提供 PostgreSQL/pgvector、Redis、Python Agent、Java 上层和 React/Nginx 五个服务；`infrastructure/postgres/init/001-schema.sql` 初始化双方所需表和向量扩展。模型密钥只从虚拟机环境变量或未提交的 `.env` 注入，不进入镜像和 Git。
