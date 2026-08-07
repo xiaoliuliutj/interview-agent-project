@@ -19,6 +19,8 @@
 - 新建 Maven/Spring Boot 项目，包含候选人、简历、JD、面试会话、面试轮次和异步任务实体与仓库。
 - `InterviewService` 在 Java 校验用户、候选人、简历与 JD 的归属关系；仅初始化时向 Python 发送资料快照，普通问答不转发上下文。
 - `InterviewSessionEntity` 使用 `@Version`，会话更新前额外校验版本，发生竞争时明确返回并发修改错误，不静默覆盖。
+- `LegacyInterviewFacade` 将原 React 的文字面试接口适配为 Java 业务操作：会话列表、未完成会话恢复、答案草稿、提前结束、删除、问答历史和报告查看均由 Java 持久化状态驱动；只有正式提交回答才进入 Python Agent。
+- 草稿答案保存在 Java 会话中，正式回答成功后清除；提前结束只关闭上层业务会话。下层 Agent 会话的归档通知仍需在后续补充专用内部契约，避免把“删除上层历史”错误等同于删除用户长期记忆。
 
 ### Python Agent Gateway
 
@@ -33,7 +35,7 @@
 ### 知识库与排期兼容模块
 
 - `KnowledgeBaseService` 只保存知识库元数据和原文，`KnowledgeBaseIndexWorker` 异步调用 Python 的 `rag.index`；Java 不实现切片或向量相似度。
-- 知识库查询通过 Python 的 `rag.search` 获取片段，再由 Java 组装原 React 所需的兼容响应。
+- 知识库查询通过 Python 的 `rag.search` 获取片段，再由 Java 组装原 React 所需的兼容响应；`/query` 和 `/query/stream` 复用同一服务，流式接口当前发送一次完整检索结果而非伪造 Token 流。
 - `RagChatService` 只管理知识库问答会话、消息、置顶和删除；`RagChatController` 用 `SseEmitter` 返回一次检索结果。它使用独立的 `KNOWLEDGE_BASE_QUERY` 用途，不把页面查询伪装成面试 Agent 的出题或简历评价。
 - `InterviewScheduleService` 是纯 Java 的排期 CRUD 和状态流转，解析只做轻量文本首行提取；需要语义解析时再提交 Python Agent 任务。
 

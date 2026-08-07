@@ -34,6 +34,7 @@ Java 不保存 Python Agent 的 Prompt、Skill、RAG 决策或记忆上下文。
 - `PythonAgentGateway` 负责固定 JSON 调用，不在 Java 重复实现 Agent。
 - `AgentCallExecutor` 负责有限重试；仅网络异常和下层可重试 5xx 重试。
 - `InterviewSessionEntity` 使用 JPA `@Version`，`InterviewSessionPersistenceService` 负责事务边界和并发版本校验。
+- 文字面试兼容层已持久化会话列表、未完成会话恢复、答案草稿、提前结束、删除和问答历史；草稿不调用下层，正式答案才调用 Python Agent。
 - `InterviewTaskEntity`、`InterviewAsyncWorker` 和线程池展示持久化异步任务生命周期。
 - `LegacyInterviewController` 保留 React 原有的核心面试/简历上传路径，并通过 Facade 转换为新领域 DTO；`KnowledgeBaseController`、`RagChatController` 和 `InterviewScheduleController` 已提供旧路径适配。语音面试仍是说明书中定义的后续扩展，不纳入首期核心链路。
 
