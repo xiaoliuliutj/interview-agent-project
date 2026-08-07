@@ -30,6 +30,12 @@
 - `InterviewTaskEntity` 先持久化任务状态，再由独立的 `InterviewAsyncWorker` 在线程池中调用业务服务；可展示 `PENDING/RUNNING/COMPLETED/FAILED` 生命周期。
 - 当前为单体首期实现；后续虚拟机部署和多实例运行时，可将 Worker 触发替换为 Redis Stream/消息队列，并采用 Outbox 保证任务事件不丢失。
 
+### 知识库与排期兼容模块
+
+- `KnowledgeBaseService` 只保存知识库元数据和原文，`KnowledgeBaseIndexWorker` 异步调用 Python 的 `rag.index`；Java 不实现切片或向量相似度。
+- 知识库查询通过 Python 的 `rag.search` 获取片段，再由 Java 组装原 React 所需的兼容响应。
+- `InterviewScheduleService` 是纯 Java 的排期 CRUD 和状态流转，解析只做轻量文本首行提取；需要语义解析时再提交 Python Agent 任务。
+
 ## 4. 工程化专题
 
 后续沉淀事务与一致性、并发与幂等、异步任务、服务失败处理、可观测性、配置与部署等实践。

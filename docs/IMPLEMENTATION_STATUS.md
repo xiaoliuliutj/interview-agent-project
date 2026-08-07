@@ -21,7 +21,7 @@ Java 不保存 Python Agent 的 Prompt、Skill、RAG 决策或记忆上下文。
 | 配置、契约、异常 | `app/core/` | 配置来自 `.env`/JSON；响应统一为 `AgentResponse`；业务码按首位分类 |
 | 面试 Agent | `app/agent/interview/` | InterviewPlan、六阶段状态机、受约束决策和状态版本 |
 | 双层记忆 | `app/agent/memory/` | 最近 5 轮短期窗口；用户级长期摘要、简历快照、偏好和薄弱点 |
-| RAG | `app/agent/rag/` | 800 Token 无重叠切片、批量 10、pgvector 检索、KB 过滤与本地回退 |
+| RAG | `app/agent/rag/` | 默认 800 Token 无重叠切片、批量 10、pgvector 检索、KB 过滤与本地回退 |
 | HTTP 入口 | `app/api/application.py` | 健康检查、初始化、问答和统一异常响应 |
 | 持久化 | `app/engineering/persistence/` | PostgreSQL 会话、长期记忆和 pgvector 仓库；无数据库时不伪造持久化 |
 | 可靠性与幂等 | `app/engineering/reliability/`、`app/engineering/idempotency/` | LLM 有限异步重试；`runId` 保存稳定响应快照并防止重复推进 |
@@ -35,7 +35,7 @@ RAG 只开放 `QUESTION_GENERATION` 和 `RESUME_EVALUATION` 两种用途。Embed
 - `AgentCallExecutor` 负责有限重试；仅网络异常和下层可重试 5xx 重试。
 - `InterviewSessionEntity` 使用 JPA `@Version`，`InterviewSessionPersistenceService` 负责事务边界和并发版本校验。
 - `InterviewTaskEntity`、`InterviewAsyncWorker` 和线程池展示持久化异步任务生命周期。
-- `LegacyInterviewController` 保留 React 原有的核心面试/简历上传路径，并通过 Facade 转换为新领域 DTO；知识库管理、语音面试和排期页面的完整旧接口仍应在后续垂直切片中逐项迁移，不能把当前占位响应当作已完成业务。
+- `LegacyInterviewController` 保留 React 原有的核心面试/简历上传路径，并通过 Facade 转换为新领域 DTO；`KnowledgeBaseController` 和 `InterviewScheduleController` 已提供旧路径适配。语音面试仍是说明书中定义的后续扩展，不纳入首期核心链路。
 
 Java 源码尚未运行 Maven 编译/测试：当前 `D:\Maven\apache-maven-3.9.16` 是源码目录，缺少 `bin/mvn.cmd`，系统也未提供可用 JDK。环境补齐后必须执行编译、Gateway 契约测试、并发测试和异步任务测试。
 
