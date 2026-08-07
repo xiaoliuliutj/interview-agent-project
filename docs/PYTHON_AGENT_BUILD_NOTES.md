@@ -149,6 +149,12 @@ app/
 - 面试 Agent 的 RAG 仅使用 `QUESTION_GENERATION` 与 `RESUME_EVALUATION`；原 React 知识库页面使用单独的 `KNOWLEDGE_BASE_QUERY` 检索验证用途。三者均由外部 `config/rag/rag-policy.json` 控制，知识库页面不参与面试 Agent 决策，也不取代长期记忆。
 - 已提供 PostgreSQL/pgvector 仓库；真实索引和检索需要配置 `DATABASE_URL`、`EMBEDDING_MODEL` 及可用的 Embedding 服务。
 
+### 简历评价 Agent
+
+- 新增 `app/agent/evaluation/` 和 `/v1/agent/evaluate/resume`，使用 `config/prompts/resume/analysis.md`、`resume-analyst` Skill 和可选 `RESUME_EVALUATION` 检索证据。
+- `ResumeEvaluation` 限制分数范围、总结长度和列表数量；响应 `output` 保留数字、列表等 JSON 类型，Java 不通过字符串拆分恢复评价结果。
+- 未配置 Embedding 时评价仍可运行，但 `ragEvidence` 为空；系统不会伪造检索来源。
+
 ### PostgreSQL 集成测试待补充
 
 - 现象：基础流程单元测试通过，但本地未提供 `DATABASE_URL`，无法执行真实的 PostgreSQL 建表、读写和乐观锁集成测试。
@@ -161,3 +167,4 @@ app/
 - 当前本地 `.env` 已配置 OpenAI-compatible 聊天模型，未输出任何 API Key、Base URL 或模型密钥内容。
 - 已实际发送固定连通问题并获得正确响应；随后在内存仓库中使用真实模型完成一次 `InterviewPlanner` 六阶段计划生成，以及一次 `InterviewDecisionAgent` 受约束决策。决策返回了有效动作、下一阶段和评价摘要。
 - 当前 `DATABASE_URL`、Embedding 模型及 Embedding 服务未配置，因此 PostgreSQL 持久化、真实向量索引与端到端 RAG 仍不能宣称已完成集成验证。
+- 真实模型简历评价验证已通过：返回合法分数、总结和优势列表；由于 Embedding 未配置，本次不包含 RAG 证据。

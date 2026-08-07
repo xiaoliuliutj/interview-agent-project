@@ -21,6 +21,7 @@ Java 不保存 Python Agent 的 Prompt、Skill、RAG 决策或记忆上下文。
 | 配置、契约、异常 | `app/core/` | 配置来自 `.env`/JSON；响应统一为 `AgentResponse`；业务码按首位分类 |
 | 面试 Agent | `app/agent/interview/` | InterviewPlan、六阶段状态机、受约束决策和状态版本 |
 | 双层记忆 | `app/agent/memory/` | 最近 5 轮短期窗口；用户级长期摘要、简历快照、偏好和薄弱点 |
+| 简历评价 Agent | `app/agent/evaluation/` | RAG 可选证据、结构化评分、总结、优势和建议；Java 异步持久化结果 |
 | RAG | `app/agent/rag/` | 默认 800 Token 无重叠切片、批量 10、pgvector 检索、KB 过滤与本地回退 |
 | HTTP 入口 | `app/api/application.py` | 健康检查、初始化、问答和统一异常响应 |
 | 持久化 | `app/engineering/persistence/` | PostgreSQL 会话、长期记忆和 pgvector 仓库；无数据库时不伪造持久化 |
@@ -67,7 +68,7 @@ React
 使用 `D:\Anaconda\envs\inter-guide\python.exe` 执行：
 
 ```text
-python -m pytest tests -q       21 passed
+python -m pytest tests -q       23 passed
 python -m compileall -q app     通过
 ```
 

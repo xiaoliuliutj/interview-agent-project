@@ -32,6 +32,7 @@
 
 - `InterviewTaskEntity` 先持久化任务状态，再由独立的 `InterviewAsyncWorker` 在线程池中调用业务服务；可展示 `PENDING/RUNNING/COMPLETED/FAILED` 生命周期。
 - 当前为单体首期实现；后续虚拟机部署和多实例运行时，可将 Worker 触发替换为 Redis Stream/消息队列，并采用 Outbox 保证任务事件不丢失。
+- `ResumeAnalysisEntity`、`ResumeAnalysisService` 和 `ResumeAnalysisWorker` 将简历评价作为独立异步任务；任务状态和结构化结果由 Java 持久化，模型调用和 RAG 证据仍由 Python 完成。
 
 ### 知识库与排期兼容模块
 

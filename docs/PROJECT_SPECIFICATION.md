@@ -365,6 +365,8 @@ Python → Java：返回结果
 Java：异步任务落库并通知前端
 ```
 
+简历评价使用 `/v1/agent/evaluate/resume`：请求传递版本化简历输入、目标岗位和可选知识库范围；Python 使用 `RESUME_EVALUATION` 检索证据和外部评价 Prompt，返回统一响应中的结构化 `output`。Java 不解析模型自由文本，只持久化受控评价字段。
+
 ### 9.4 提前结束面试
 
 ```text
