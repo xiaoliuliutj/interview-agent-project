@@ -131,8 +131,9 @@ app/
 
 ### HTTP API 与依赖组装
 
-- 新增 `app/api/application.py`：提供 `/health`、`/v1/agent/sessions/initialize`、`/v1/agent/respond`。
+- 新增 `app/api/application.py`：提供 `/health`、`/v1/agent/sessions/initialize`、`/v1/agent/respond` 和 `/v1/agent/sessions/complete`。
 - 初始化请求才允许传候选人、简历和 JD 快照；普通问答只传 `userId`、`sessionId`、`runId` 和用户回答。
+- `agent.session.complete` 不调用模型，不携带回答或上层历史；它以 `userId + sessionId` 校验并幂等关闭 Agent 会话，长期记忆仍按 `userId` 保留。
 - FastAPI 校验错误、下层业务异常和未预期异常都转换为同一 `AgentResponse` 字段集合；HTTP 状态码不替代三位业务码。
 - `app/bootstrap.py` 只在配置了 PostgreSQL 时组装生产服务，不回退为临时文件或内存数据。
 

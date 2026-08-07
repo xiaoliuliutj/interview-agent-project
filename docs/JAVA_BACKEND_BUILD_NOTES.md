@@ -20,7 +20,7 @@
 - `InterviewService` 在 Java 校验用户、候选人、简历与 JD 的归属关系；仅初始化时向 Python 发送资料快照，普通问答不转发上下文。
 - `InterviewSessionEntity` 使用 `@Version`，会话更新前额外校验版本，发生竞争时明确返回并发修改错误，不静默覆盖。
 - `LegacyInterviewFacade` 将原 React 的文字面试接口适配为 Java 业务操作：会话列表、未完成会话恢复、答案草稿、提前结束、删除、问答历史和报告查看均由 Java 持久化状态驱动；只有正式提交回答才进入 Python Agent。
-- 草稿答案保存在 Java 会话中，正式回答成功后清除；提前结束只关闭上层业务会话。下层 Agent 会话的归档通知仍需在后续补充专用内部契约，避免把“删除上层历史”错误等同于删除用户长期记忆。
+- 草稿答案保存在 Java 会话中，正式回答成功后清除；提前结束先通过 `agent.session.complete` 关闭下层 Agent 会话，再提交 Java 业务完成状态。删除上层历史不会删除用户长期记忆；下层会话保留为已完成记录，后续可补充归档清理策略。
 
 ### Python Agent Gateway
 

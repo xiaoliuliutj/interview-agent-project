@@ -123,6 +123,8 @@ FastAPI 的异步请求处理、数据库连接池和模型客户端的并发请
 
 必填字段：`apiVersion`、`requestId`、`runId`、`userId`、`sessionId`、`operation`、`question` 和 `timestamp`。请求不携带会话上下文、历史消息或上层业务字段；下层根据 `userId + sessionId` 读取和维护自己的会话状态。
 
+会话提前结束使用独立的 `agent.session.complete` 请求，不复用问答的 `question` 字段：它只携带 `apiVersion`、`requestId`、`runId`、`userId`、`sessionId`、`operation` 和 `timestamp`。下层将对应 Agent 会话置为 `COMPLETED` 并返回同一响应结构；用户级长期记忆不删除。Java 只有在下层成功关闭后才提交自己的业务完成状态，重试同一关闭操作应得到稳定的已完成结果。
+
 ### 6.2 下层返回上层
 
 ```json

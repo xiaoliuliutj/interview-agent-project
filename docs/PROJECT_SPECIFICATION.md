@@ -358,6 +358,17 @@ Python → Java：返回结果
 Java：异步任务落库并通知前端
 ```
 
+### 9.4 提前结束面试
+
+```text
+前端 → Java：结束业务面试
+Java：校验用户和会话状态
+Java → Python：发送 agent.session.complete（不携带问答上下文）
+Python：以 sessionId + userId 校验并关闭 Agent 会话，保留长期记忆
+Python → Java：返回统一完成响应
+Java：持久化业务会话完成状态并返回前端
+```
+
 ## 10. 配置、Prompt、Skill 和资料规则
 
 ### 10.1 Python
