@@ -181,7 +181,9 @@ FastAPI 的异步请求处理、数据库连接池和模型客户端的并发请
 
 成功、处理中、部分结果和失败必须使用完全相同的响应字段集合，不能通过删字段或更换 JSON 层级表达状态差异。上层只根据 `code`、`status`、`sessionStatus`、`answer` 和 `error` 的值解析结果；下层不返回 `nextQuestion` 等面试业务字段。
 
-记忆的检索范围使用组合条件，而不是拼接 ID：长期记忆按 `(agentId, userId)` 隔离，短期会话记忆按 `(agentId, userId, sessionId)` 隔离；一次运行的状态和事件按 `runId` 管理。
+记忆的检索范围使用组合条件，而不是拼接 ID：短期记忆按 `(userId, sessionId)` 隔离，只保留最近 3–5 轮完整问答与当前会话状态；长期记忆按 `userId` 隔离，保存用户历史摘要、已确认的简历信息及其他长期有效信息。一次运行的状态和事件按 `runId` 管理。`agentId` 仅用于选择 Agent 配置，不作为记忆主键。
+
+普通问答请求仍禁止携带 `history`、`memory`、简历全文或 JD 全文。下层使用请求中的 `userId + sessionId` 自行读取这两层记忆；初始化请求才可携带资料快照，供下层建立本次会话与长期记忆索引。
 
 当后续支持用户自定义 Agent 配置时，再增加独立的 `agentInstanceId` 或 `agentProfileId`。该实例仍然不应替代用户和会话标识。
 
