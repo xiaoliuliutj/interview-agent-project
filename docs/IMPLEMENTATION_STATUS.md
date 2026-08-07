@@ -21,6 +21,7 @@ Java 不保存 Python Agent 的 Prompt、Skill、RAG 决策或记忆上下文。
 | 配置、契约、异常 | `app/core/` | 配置来自 `.env`/JSON；响应统一为 `AgentResponse`；业务码按首位分类 |
 | 面试 Agent | `app/agent/interview/` | InterviewPlan、六阶段状态机、受约束决策和状态版本 |
 | 双层记忆 | `app/agent/memory/` | 最近 5 轮短期窗口；用户级长期摘要、简历快照、偏好和薄弱点 |
+| MCP 参考工具 | `app/agent/mcp/` | 只读查询外置面试基础资料；stdio 启动，受长度和结果数量限制 |
 | 简历评价 Agent | `app/agent/evaluation/` | RAG 可选证据、结构化评分、总结、优势和建议；Java 异步持久化结果 |
 | RAG | `app/agent/rag/` | 默认 800 Token 无重叠切片、批量 10、pgvector 检索、KB 过滤与本地回退 |
 | HTTP 入口 | `app/api/application.py` | 健康检查、初始化、问答和统一异常响应 |
@@ -72,7 +73,7 @@ python -m pytest tests -q       23 passed
 python -m compileall -q app     通过
 ```
 
-测试覆盖：面试阶段推进、重复会话、短期/长期记忆、统一 API 响应、RAG 切片、Embedding 批次、知识库过滤回退。PostgreSQL、真实 Embedding、Java 和完整容器启动仍属于待环境补齐后的集成验证。
+测试覆盖：面试阶段推进、重复会话、短期/长期记忆、统一 API 响应、RAG 切片、Embedding 批次、知识库过滤回退，以及 MCP 只读工具边界。PostgreSQL、真实 Embedding、Java 和完整容器启动仍属于待环境补齐后的集成验证。
 
 真实模型验证：已使用当前本地 OpenAI-compatible 配置完成聊天连通、六阶段面试规划和单轮受约束 Decision Agent 决策验证；测试过程未输出敏感配置。数据库和 Embedding 未配置，因此上述验证不替代持久化/RAG 集成测试。
 

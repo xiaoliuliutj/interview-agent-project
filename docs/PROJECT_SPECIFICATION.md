@@ -189,6 +189,10 @@ FOLLOW_UP / NEXT_QUESTION / NEXT_STAGE / END_INTERVIEW
 - Skills：可配置的任务能力包，由 Prompt、规则和参考资料组成。
 - MCP：对外部资源的标准化工具接入；首期保留接口和示例，不做复杂生态。
 
+当前已落地一个只读 MCP 参考工具：下层以 stdio 启动 MCP Server，从外置的面试基础
+资料中按查询词返回有限段落。它用于展示标准化工具接入，不保存会话状态、不写入记忆，
+也不直接执行上层业务动作。MCP 调用仍受下层工具白名单、超时和统一错误码约束。
+
 三者都由 Python Agent 运行时选择和执行；Java 不实现 Agent 工具调用。
 
 ### 6.5 RAG 模块

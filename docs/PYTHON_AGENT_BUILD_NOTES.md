@@ -149,6 +149,18 @@ app/
 - 面试 Agent 的 RAG 仅使用 `QUESTION_GENERATION` 与 `RESUME_EVALUATION`；原 React 知识库页面使用单独的 `KNOWLEDGE_BASE_QUERY` 检索验证用途。三者均由外部 `config/rag/rag-policy.json` 控制，知识库页面不参与面试 Agent 决策，也不取代长期记忆。
 - 已提供 PostgreSQL/pgvector 仓库；真实索引和检索需要配置 `DATABASE_URL`、`EMBEDDING_MODEL` 及可用的 Embedding 服务。
 
+### MCP：只读外部参考工具
+
+- `app/agent/mcp/server.py` 提供一个最小的 MCP Server，通过 `FastMCP` 暴露
+  `lookup_interview_reference(query)` 工具。
+- 工具只读取 `config/rag/sources/interview-basics.md`，不修改会话、记忆或业务数据；
+  查询长度限制为 200 个字符，结果限制为最多 5 个段落。
+- MCP 是下层 Agent 的可选能力，不改变上层与下层的 JSON 契约；需要启用时由 Agent
+  配置选择工具，不能让 MCP 工具反向承担 Java 业务编排。
+- 本地可使用 `python -m app.agent.mcp.server` 通过 stdio 启动，测试覆盖只读行为、空
+  查询和长度边界。后续若接入远端 MCP Server，必须补充超时、失败映射、来源审计和
+  工具白名单。
+
 ### 简历评价 Agent
 
 - 新增 `app/agent/evaluation/` 和 `/v1/agent/evaluate/resume`，使用 `config/prompts/resume/analysis.md`、`resume-analyst` Skill 和可选 `RESUME_EVALUATION` 检索证据。
