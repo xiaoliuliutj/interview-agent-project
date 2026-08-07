@@ -322,11 +322,11 @@ Docker Compose 编排了 6 个服务：PostgreSQL（pgvector）、Redis、MinIO�
 
 在项目根目录下执行：
 
-`.env.example` 中的 PostgreSQL、Redis、MinIO 已与 `docker-compose.yml` 对齐（数据库用户 `postgres` / 密码 `password`，MinIO `minioadmin` / `minioadmin`）。复制为 `.env` 后主要填写 `AI_BAILIAN_API_KEY`；若你曾在旧版本中使用过不同的库密码或对象存储密钥，请同步修改 `.env`，必要时重建 Postgres 卷以免旧数据与密码不一致。
+`.env` 中的 PostgreSQL、Redis、MinIO 已与 `docker-compose.yml` 对齐（数据库用户 `postgres` / 密码 `password`，MinIO `minioadmin` / `minioadmin`）。复制为 `.env` 后主要填写 `AI_BAILIAN_API_KEY`；若你曾在旧版本中使用过不同的库密码或对象存储密钥，请同步修改 `.env`，必要时重建 Postgres 卷以免旧数据与密码不一致。
 
 ```bash
 # 1. 复制环境变量配置文件
-cp .env.example .env
+cp .env .env
 
 # 2. 编辑 .env 文件，填入 AI 配置
 # vim .env
@@ -337,7 +337,7 @@ cp .env.example .env
 # 多 LLM 提供商支持（可选）：
 # APP_VOICE_INTERVIEW_LLM_PROVIDER=dashscope  # 默认使用 DashScope
 #        # 也支持：minimax, openai, deepseek, lmstudio
-#        # 如需使用其他提供商，请参考 .env.example 中的配置说明
+#        # 如需使用其他提供商，请参考 .env 中的配置说明
 #
 # 面试参数配置（可选）：
 # APP_INTERVIEW_FOLLOW_UP_COUNT=1         # 每个主问题生成追问数量（默认 1）
@@ -347,7 +347,7 @@ cp .env.example .env
 docker-compose up -d --build
 ```
 
-> **仅启动依赖服务**：如果只想本地开发调试（用 `./gradlew bootRun` 启动后端），可以只启动基础设施：`docker compose up -d postgres redis minio createbuckets`。将 `.env.example` 复制为 `.env` 并填写 `AI_BAILIAN_API_KEY` 即可，默认账号与 `docker-compose.yml` 一致。
+> **仅启动依赖服务**：如果只想本地开发调试（用 `./gradlew bootRun` 启动后端），可以只启动基础设施：`docker compose up -d postgres redis minio createbuckets`。将 `.env` 复制为 `.env` 并填写 `AI_BAILIAN_API_KEY` 即可，默认账号与 `docker-compose.yml` 一致。
 
 ### 3. 服务访问
 
