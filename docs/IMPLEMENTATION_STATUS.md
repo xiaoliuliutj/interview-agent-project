@@ -24,6 +24,7 @@ Java 不保存 Python Agent 的 Prompt、Skill、RAG 决策或记忆上下文。
 | RAG | `app/agent/rag/` | 800 Token 无重叠切片、批量 10、pgvector 检索、KB 过滤与本地回退 |
 | HTTP 入口 | `app/api/application.py` | 健康检查、初始化、问答和统一异常响应 |
 | 持久化 | `app/engineering/persistence/` | PostgreSQL 会话、长期记忆和 pgvector 仓库；无数据库时不伪造持久化 |
+| 可靠性与幂等 | `app/engineering/reliability/`、`app/engineering/idempotency/` | LLM 有限异步重试；`runId` 保存稳定响应快照并防止重复推进 |
 
 RAG 只开放 `QUESTION_GENERATION` 和 `RESUME_EVALUATION` 两种用途。Embedding 未配置时 Agent 仍能运行基础流程，但不会伪造检索依据；配置后 Planner 和 Decision Agent 自动通过 Tool 获取检索证据。
 
@@ -60,7 +61,7 @@ React
 使用 `D:\Anaconda\envs\inter-guide\python.exe` 执行：
 
 ```text
-python -m pytest tests -q       13 passed
+python -m pytest tests -q       17 passed
 python -m compileall -q app     通过
 ```
 

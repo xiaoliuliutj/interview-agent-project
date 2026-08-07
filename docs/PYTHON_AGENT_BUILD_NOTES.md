@@ -136,6 +136,11 @@ app/
 - FastAPI 校验错误、下层业务异常和未预期异常都转换为同一 `AgentResponse` 字段集合；HTTP 状态码不替代三位业务码。
 - `app/bootstrap.py` 只在配置了 PostgreSQL 时组装生产服务，不回退为临时文件或内存数据。
 
+### 下层可靠性与幂等
+
+- `app/engineering/reliability/` 使用外部 JSON 策略统一包裹 Planner/Decision 的模型调用；SDK 自身不重试，避免两层叠加造成重试风暴。
+- `runId` 在 AgentSession 中保存稳定响应快照；同一 `runId` 重放时直接返回原快照，不再次调用模型、推进阶段或更新记忆。快照窗口由 `config/agent/idempotency.json` 控制。
+
 ### RAG：原项目逻辑的下层迁移
 
 - `app/agent/rag/` 负责文档解析、800 Token 无重叠切片、每批最多 10 个分片的向量化、知识库过滤和相似度检索。
