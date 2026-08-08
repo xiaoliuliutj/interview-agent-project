@@ -5,7 +5,7 @@ export type EvaluateStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
 
 export interface ResumeListItem {
   id: number;
-  filename: string;
+  filename: string | null;
   fileSize: number;
   uploadedAt: string;
   accessCount: number;
@@ -68,7 +68,7 @@ export interface AnswerItem {
 
 export interface ResumeDetail {
   id: number;
-  filename: string;
+  filename: string | null;
   fileSize: number;
   contentType: string;
   storageUrl: string;

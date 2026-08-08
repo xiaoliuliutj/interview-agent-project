@@ -181,7 +181,7 @@ export default function HistoryList({ onSelectResume }: HistoryListProps) {
     if (resume.storageUrl) {
       const link = document.createElement('a');
       link.href = resume.storageUrl;
-      link.download = resume.filename;
+      link.download = resume.filename || '未命名简历';
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -223,7 +223,7 @@ export default function HistoryList({ onSelectResume }: HistoryListProps) {
   };
 
   const filteredResumes = resumes.filter(resume =>
-    resume.filename.toLowerCase().includes(searchTerm.toLowerCase())
+    (resume.filename || '未命名简历').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
@@ -440,7 +440,7 @@ export default function HistoryList({ onSelectResume }: HistoryListProps) {
       {/* 删除确认对话框 */}
       <DeleteConfirmDialog
         open={deleteItem !== null}
-        item={deleteItem ? { id: deleteItem.id, name: deleteItem.filename } : null}
+        item={deleteItem ? { id: deleteItem.id, name: deleteItem.filename || '未命名简历' } : null}
         itemType="简历"
         loading={deletingId !== null}
         onConfirm={handleDeleteConfirm}

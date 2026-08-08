@@ -77,9 +77,9 @@ export default function HistoryList({onSelectResume}: HistoryListProps) {
     return () => clearInterval(id);
   }, [hasAnalyzing, loadResumes]);
 
-  const handleDeleteClick = (id: number, filename: string, e: React.MouseEvent) => {
+  const handleDeleteClick = (id: number, filename: string | null, e: React.MouseEvent) => {
     e.stopPropagation();
-    setDeleteConfirm({id, filename});
+    setDeleteConfirm({id, filename: filename || '未命名简历'});
   };
 
   const handleDeleteConfirm = async () => {
@@ -99,7 +99,7 @@ export default function HistoryList({onSelectResume}: HistoryListProps) {
   };
 
   const filteredResumes = resumes.filter(resume =>
-    resume.filename.toLowerCase().includes(searchTerm.toLowerCase())
+    (resume.filename || '未命名简历').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
@@ -219,7 +219,7 @@ export default function HistoryList({onSelectResume}: HistoryListProps) {
                                     strokeLinecap="round" strokeLinejoin="round"/>
                         </svg>
                       </div>
-                      <span className="font-medium text-slate-800 dark:text-white">{resume.filename}</span>
+                      <span className="font-medium text-slate-800 dark:text-white">{resume.filename || '未命名简历'}</span>
                     </div>
                   </td>
                   <td className="px-6 py-5 text-slate-500 dark:text-slate-400">{formatDateOnly(resume.uploadedAt)}</td>
