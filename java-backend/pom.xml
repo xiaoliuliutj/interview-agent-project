@@ -67,7 +67,8 @@
         <dependency>
             <groupId>org.apache.pdfbox</groupId>
             <artifactId>pdfbox</artifactId>
-            <version>3.0.3</version>
+            <!-- Tika 2.9.2 依赖 PDFBox 2.x API；避免与 PDF 解析器发生二进制不兼容。 -->
+            <version>2.0.31</version>
         </dependency>
         <dependency>
             <groupId>org.postgresql</groupId>
