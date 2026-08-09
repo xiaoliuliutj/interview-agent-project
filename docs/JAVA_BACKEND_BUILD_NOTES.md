@@ -87,3 +87,7 @@
 - Python 的参数校验响应是统一 JSON 搭配 HTTP 400；Java 网关不能把所有
   `RestClientException` 都当作可重试故障。现在 HTTP 4xx 不重试，HTTP 5xx 和无响应的
   网络异常才进入重试器，避免无效请求放大下层压力。
+## 8. Java 调用 Python 的 HTTP 协议
+
+- 容器联调中，Java 默认 HTTP 客户端会尝试 `h2c`（HTTP/2 明文升级），而 Uvicorn 下层服务只按 HTTP/1.1 接收请求。日志中出现 `Unsupported upgrade request` 或 `Invalid HTTP request received` 时，FastAPI 会拿不到可校验的 JSON 请求体，并以 HTTP 400 返回空的请求标识字段。
+- `AgentHttpConfiguration` 显式使用 JDK `HttpClient.Version.HTTP_1_1`。这是上下层服务之间的协议适配，不改变业务 JSON 契约；之后排查下层 400 时，应先检查 Python 日志是否仍出现上述协议告警。
