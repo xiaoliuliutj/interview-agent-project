@@ -1,4 +1,5 @@
 import pytest
+import tiktoken
 
 from app.agent.rag.models import KnowledgeDocument, RagUseCase
 from app.agent.rag.parser import TokenChunker
@@ -99,6 +100,64 @@ async def test_search_rejects_an_implicit_default_knowledge_base() -> None:
 def test_chunker_rejects_invalid_overlap_parameters() -> None:
     with pytest.raises(Exception):
         TokenChunker(chunk_size_tokens=20, overlap_tokens=20)
+
+
+def test_chunker_splits_markdown_by_heading_before_token_budget() -> None:
+    chunker = TokenChunker(chunk_size_tokens=100, overlap_tokens=0)
+    document = KnowledgeDocument(
+        knowledge_base_id="kb-1",
+        document_id="doc-heading",
+        source_name="heading.md",
+        content=(
+            "# Java 面试资料\n\n"
+            "## 集合\n集合用于组织对象。\n\n"
+            "## 并发\n并发需要关注可见性与原子性。"
+        ),
+    )
+
+    chunks = chunker.split(document)
+
+    assert len(chunks) == 2
+    assert "# Java 面试资料\n## 集合" in chunks[0].content
+    assert "# Java 面试资料\n## 并发" in chunks[1].content
+    assert chunks[0].metadata["headingPath"] == "Java 面试资料 > 集合"
+    assert chunks[1].metadata["chunkingStrategy"] == "heading_then_token"
+
+
+def test_chunker_token_splits_an_oversized_heading_section_with_context() -> None:
+    chunker = TokenChunker(chunk_size_tokens=30, overlap_tokens=4)
+    document = KnowledgeDocument(
+        knowledge_base_id="kb-1",
+        document_id="doc-long-heading",
+        source_name="long.md",
+        content="# Java 面试资料\n\n## JVM\n" + "垃圾回收与内存模型。" * 80,
+    )
+
+    chunks = chunker.split(document)
+    encoding = tiktoken.get_encoding("cl100k_base")
+
+    assert len(chunks) > 1
+    assert all(chunk.content.startswith("# Java 面试资料\n## JVM") for chunk in chunks)
+    assert all(len(encoding.encode(chunk.content)) <= 30 for chunk in chunks)
+    assert [chunk.metadata["sectionPartIndex"] for chunk in chunks] == [
+        str(index) for index in range(len(chunks))
+    ]
+
+
+def test_chunker_does_not_treat_a_code_comment_as_a_markdown_heading() -> None:
+    chunker = TokenChunker(chunk_size_tokens=100, overlap_tokens=0)
+    document = KnowledgeDocument(
+        knowledge_base_id="kb-1",
+        document_id="doc-code",
+        source_name="code.md",
+        content="## RAG\n\n```python\n# 这是一条代码注释\nprint('ok')\n```",
+    )
+
+    chunks = chunker.split(document)
+
+    assert len(chunks) == 1
+    assert chunks[0].metadata["headingPath"] == "RAG"
+    assert "# 这是一条代码注释" in chunks[0].content
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,7 @@
   "chunkSizeTokens": 800,
   "chunkOverlapTokens": 0,
   "embeddingBatchSize": 10,
-  "defaultTopK": 4,
+  "defaultTopK": 10,
   "defaultMinScore": 0.35,
   "fallbackCandidateMultiplier": 3,
   "allowedUseCases": ["QUESTION_GENERATION"],
