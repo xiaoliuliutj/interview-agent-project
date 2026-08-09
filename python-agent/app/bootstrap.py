@@ -73,9 +73,10 @@ def build_interview_agent_service(
 def build_rag_service(settings: Settings | None = None) -> RagService:
     current = settings or get_settings()
     session_factory = create_session_factory(current)
+    retry_executor = AsyncRetryExecutor(RetryPolicy.load())
     return RagService(
         repository=PostgresRagVectorRepository(session_factory),
-        embedding_provider=OpenAIEmbeddingProvider(current),
+        embedding_provider=OpenAIEmbeddingProvider(current, retry_executor),
         policy=RagPolicy.load(),
     )
 

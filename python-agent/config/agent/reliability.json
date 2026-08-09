@@ -1,5 +1,7 @@
 {
-  "maxAttempts": 3,
+  "maxAttempts": 5,
+  "attemptTimeoutSeconds": 120,
+  "maxOutputCorrectionAttempts": 2,
   "initialBackoffMilliseconds": 200,
   "maxBackoffMilliseconds": 2000,
   "retryableErrors": [

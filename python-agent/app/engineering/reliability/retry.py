@@ -16,10 +16,18 @@ class AsyncRetryExecutor:
     def __init__(self, policy: RetryPolicy) -> None:
         self._policy = policy
 
+    @property
+    def max_output_correction_attempts(self) -> int:
+        return self._policy.max_output_correction_attempts
+
     async def execute(self, operation: Callable[[], Awaitable[T]]) -> T:
         for attempt in range(1, self._policy.max_attempts + 1):
             try:
-                return await operation()
+                # 该上限对所有经由此执行器的模型与外部 Agent 调用生效；
+                # wait_for 取消超时协程，避免请求在后台无限悬挂。
+                return await asyncio.wait_for(
+                    operation(), timeout=self._policy.attempt_timeout_seconds
+                )
             except Exception as error:
                 if not self._is_retryable(error) or attempt == self._policy.max_attempts:
                     if self._is_retryable(error):

@@ -41,6 +41,14 @@ class AgentDependencyError(ApplicationException):
     retryable = True
 
 
+class ModelOutputError(ApplicationException):
+    """模型已正常响应，但内容无法满足受控输出契约。"""
+
+    code = 502
+    error_type = "MODEL_OUTPUT_INVALID"
+    retryable = False
+
+
 class ModelConfigurationError(AgentDependencyError):
     code = 500
     error_type = "MODEL_CONFIGURATION_ERROR"

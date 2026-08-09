@@ -1,4 +1,7 @@
 import pytest
+import json
+
+from app.core.exceptions import ReliabilityConfigurationError
 
 from app.core.exceptions import AgentDependencyError
 from app.engineering.reliability.policy import RetryPolicy
@@ -53,3 +56,18 @@ async def test_retry_executor_maps_exhausted_transient_failure() -> None:
     with pytest.raises(AgentDependencyError) as error:
         await build_executor().execute(operation)
     assert error.value.retryable is True
+
+
+def test_retry_policy_rejects_more_than_five_total_attempts(tmp_path) -> None:
+    path = tmp_path / "reliability.json"
+    path.write_text(json.dumps({
+        "maxAttempts": 6,
+        "attemptTimeoutSeconds": 120,
+        "maxOutputCorrectionAttempts": 2,
+        "initialBackoffMilliseconds": 0,
+        "maxBackoffMilliseconds": 0,
+        "retryableErrors": ["TimeoutError"],
+    }), encoding="utf-8")
+
+    with pytest.raises(ReliabilityConfigurationError):
+        RetryPolicy.load(path)

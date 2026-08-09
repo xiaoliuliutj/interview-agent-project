@@ -18,7 +18,8 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8000, ge=1, le=65535)
     log_level: str = Field(default="INFO")
-    request_timeout_seconds: float = Field(default=60.0, gt=0)
+    # 单次模型/Embedding HTTP 调用的客户端超时；可靠性策略会再次强制该上限。
+    request_timeout_seconds: float = Field(default=120.0, gt=0, le=120)
 
     model_provider: str = Field(default="openai")
     model_name: str = Field(default="")

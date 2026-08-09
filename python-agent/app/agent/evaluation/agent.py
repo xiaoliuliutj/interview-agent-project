@@ -1,27 +1,17 @@
 """基于简历事实、岗位要求与外置 Skill 的简历评价 Agent。"""
 
-import json
-from typing import Protocol
-
-from langchain_core.messages import HumanMessage, SystemMessage
-
 from app.agent.skills.loader import SkillRegistry
 from app.core.prompt_loader import PromptLoader
 from app.engineering.reliability.retry import AsyncRetryExecutor
+from app.engineering.reliability.structured_output import RawChatModel, StructuredOutputInvoker
 
 from .models import ResumeEvaluation
-
-
-class StructuredChatModel(Protocol):
-    def with_structured_output(self, schema: type[object]) -> "StructuredChatModel": ...
-
-    async def ainvoke(self, input_value: object) -> object: ...
 
 
 class ResumeEvaluationAgent:
     def __init__(
         self,
-        model: StructuredChatModel,
+        model: RawChatModel,
         prompt_loader: PromptLoader,
         skill_registry: SkillRegistry,
         retry_executor: AsyncRetryExecutor | None = None,
@@ -30,6 +20,7 @@ class ResumeEvaluationAgent:
         self._prompt_loader = prompt_loader
         self._skill_registry = skill_registry
         self._retry_executor = retry_executor
+        self._structured_output = StructuredOutputInvoker(prompt_loader, retry_executor)
 
     async def evaluate(
         self,
@@ -51,16 +42,9 @@ class ResumeEvaluationAgent:
             "targetRole": target_role,
             "resumeText": normalized_text,
         }
-        evaluator = self._model.with_structured_output(ResumeEvaluation)
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=json.dumps(payload, ensure_ascii=False)),
-        ]
-        result = (
-            await self._retry_executor.execute(lambda: evaluator.ainvoke(messages))
-            if self._retry_executor is not None
-            else await evaluator.ainvoke(messages)
+        return await self._structured_output.invoke(
+            model=self._model,
+            schema=ResumeEvaluation,
+            business_prompt=system_prompt,
+            input_payload=payload,
         )
-        if not isinstance(result, ResumeEvaluation):
-            raise TypeError("模型未返回 ResumeEvaluation")
-        return result

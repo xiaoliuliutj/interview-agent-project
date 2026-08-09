@@ -22,7 +22,7 @@ spring:
         default-requeue-rejected: false
         retry:
           enabled: true
-          max-attempts: ${AGENT_RABBIT_RETRY_MAX_ATTEMPTS:3}
+          max-attempts: ${AGENT_RABBIT_RETRY_MAX_ATTEMPTS:2}
           initial-interval: ${AGENT_RABBIT_RETRY_INITIAL_INTERVAL_MS:1000}
           multiplier: ${AGENT_RABBIT_RETRY_MULTIPLIER:2.0}
           max-interval: ${AGENT_RABBIT_RETRY_MAX_INTERVAL_MS:10000}
@@ -48,7 +48,9 @@ agent:
   python:
     base-url: ${PYTHON_AGENT_BASE_URL:http://localhost:8000}
     connect-timeout: ${PYTHON_AGENT_CONNECT_TIMEOUT:2s}
-    read-timeout: ${PYTHON_AGENT_READ_TIMEOUT:60s}
+    # 下层一次物理模型请求最多 120 秒，网络重试最多 5 次；异步消费者必须
+    # 等到下层返回标准错误 JSON，才能把具体失败原因写回任务与前端。
+    read-timeout: ${PYTHON_AGENT_READ_TIMEOUT:11m}
   reliability:
     max-attempts: ${AGENT_MAX_ATTEMPTS:2}
     backoff-millis: ${AGENT_RETRY_BACKOFF_MILLIS:200}

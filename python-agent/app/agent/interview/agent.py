@@ -1,13 +1,9 @@
 """基于大模型的面试规划与受约束决策。"""
 
-import json
-from typing import Protocol
-
-from langchain_core.messages import HumanMessage, SystemMessage
-
 from app.agent.skills.loader import SkillRegistry
 from app.agent.memory.models import MemoryContext
 from app.engineering.reliability.retry import AsyncRetryExecutor
+from app.engineering.reliability.structured_output import RawChatModel, StructuredOutputInvoker
 from app.core.prompt_loader import PromptLoader
 
 from .models import (
@@ -21,16 +17,10 @@ from .models import (
 )
 
 
-class StructuredChatModel(Protocol):
-    def with_structured_output(self, schema: type[object]) -> "StructuredChatModel": ...
-
-    async def ainvoke(self, input_value: object) -> object: ...
-
-
 class InterviewPlanner:
     def __init__(
         self,
-        model: StructuredChatModel,
+        model: RawChatModel,
         prompt_loader: PromptLoader,
         skill_registry: SkillRegistry,
         retry_executor: AsyncRetryExecutor | None = None,
@@ -39,9 +29,9 @@ class InterviewPlanner:
         self._prompt_loader = prompt_loader
         self._skill_registry = skill_registry
         self._retry_executor = retry_executor
+        self._structured_output = StructuredOutputInvoker(prompt_loader, retry_executor)
 
     async def create_plan(self, profile: CandidateProfile) -> InterviewPlan:
-        planner = self._model.with_structured_output(InterviewPlan)
         skills = self._skill_registry.select_for_interview(
             target_role=profile.target_role,
             jd_text=profile.jd_text,
@@ -52,13 +42,10 @@ class InterviewPlanner:
             {"skill_instructions": "\n\n".join(item.instructions for item in skills)},
         )
         input_payload = profile.model_dump(mode="json")
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=json.dumps(input_payload, ensure_ascii=False)),
-        ]
-        result = await self._invoke(planner, messages)
-        if not isinstance(result, InterviewPlan):
-            raise TypeError("模型未返回 InterviewPlan")
+        result = await self._structured_output.invoke(
+            model=self._model, schema=InterviewPlan, business_prompt=system_prompt,
+            input_payload=input_payload,
+        )
         planned_question_count = sum(item.max_primary_questions for item in result.stages)
         if planned_question_count != profile.question_count:
             raise ValueError(
@@ -71,18 +58,12 @@ class InterviewPlanner:
             result = result.model_copy(update={"selected_skills": [item.skill_id for item in skills]})
         return result
 
-    async def _invoke(self, model: StructuredChatModel, messages: object) -> object:
-        if self._retry_executor is None:
-            return await model.ainvoke(messages)
-        return await self._retry_executor.execute(lambda: model.ainvoke(messages))
-
-
 class InterviewEvaluationAgent:
     """First workflow node: score the answer without deciding what happens next."""
 
     def __init__(
         self,
-        model: StructuredChatModel,
+        model: RawChatModel,
         prompt_loader: PromptLoader,
         skill_registry: SkillRegistry,
         retry_executor: AsyncRetryExecutor | None = None,
@@ -91,6 +72,7 @@ class InterviewEvaluationAgent:
         self._prompt_loader = prompt_loader
         self._skill_registry = skill_registry
         self._retry_executor = retry_executor
+        self._structured_output = StructuredOutputInvoker(prompt_loader, retry_executor)
 
     async def evaluate(
         self,
@@ -98,7 +80,6 @@ class InterviewEvaluationAgent:
         candidate_answer: str,
         memory_context: MemoryContext,
     ) -> InterviewEvaluation:
-        evaluator = self._model.with_structured_output(InterviewEvaluation)
         context = {
             "current_stage": session.current_stage,
             "difficulty": session.difficulty,
@@ -126,19 +107,10 @@ class InterviewEvaluationAgent:
             "interview/evaluation.md",
             {"skill_instructions": scoring_skill.instructions},
         )
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=json.dumps(context, ensure_ascii=False, default=str)),
-        ]
-        if self._retry_executor is None:
-            result = await evaluator.ainvoke(messages)
-        else:
-            result = await self._retry_executor.execute(
-                lambda: evaluator.ainvoke(messages)
-            )
-        if not isinstance(result, InterviewEvaluation):
-            raise TypeError("模型未返回 InterviewEvaluation")
-        return result
+        return await self._structured_output.invoke(
+            model=self._model, schema=InterviewEvaluation, business_prompt=system_prompt,
+            input_payload=context,
+        )
 
 
 class InterviewRoutingAgent:
@@ -146,7 +118,7 @@ class InterviewRoutingAgent:
 
     def __init__(
         self,
-        model: StructuredChatModel,
+        model: RawChatModel,
         prompt_loader: PromptLoader,
         skill_registry: SkillRegistry,
         retry_executor: AsyncRetryExecutor | None = None,
@@ -155,6 +127,7 @@ class InterviewRoutingAgent:
         self._prompt_loader = prompt_loader
         self._skill_registry = skill_registry
         self._retry_executor = retry_executor
+        self._structured_output = StructuredOutputInvoker(prompt_loader, retry_executor)
 
     async def route(
         self,
@@ -164,7 +137,6 @@ class InterviewRoutingAgent:
         next_stage_name: str | None,
         memory_context: MemoryContext,
     ) -> InterviewRoute:
-        router = self._model.with_structured_output(InterviewRoute)
         context = {
             "current_stage": session.current_stage,
             "current_question": session.current_question,
@@ -183,29 +155,22 @@ class InterviewRoutingAgent:
             "interview/routing.md",
             {"skill_instructions": "\n\n".join(item.instructions for item in skills)},
         )
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=json.dumps(context, ensure_ascii=False, default=str)),
-        ]
-        result = (
-            await self._retry_executor.execute(lambda: router.ainvoke(messages))
-            if self._retry_executor is not None
-            else await router.ainvoke(messages)
+        return await self._structured_output.invoke(
+            model=self._model, schema=InterviewRoute, business_prompt=system_prompt,
+            input_payload=context,
         )
-        if not isinstance(result, InterviewRoute):
-            raise TypeError("模型未返回 InterviewRoute")
-        return result
 
 
 class InterviewQuestionAgent:
     """Generate a concrete question only after routing has fixed the topic."""
 
-    def __init__(self, model: StructuredChatModel, prompt_loader: PromptLoader,
+    def __init__(self, model: RawChatModel, prompt_loader: PromptLoader,
                  skill_registry: SkillRegistry, retry_executor: AsyncRetryExecutor | None = None) -> None:
         self._model = model
         self._prompt_loader = prompt_loader
         self._skill_registry = skill_registry
         self._retry_executor = retry_executor
+        self._structured_output = StructuredOutputInvoker(prompt_loader, retry_executor)
 
     async def generate(self, session: InterviewSession, route: InterviewRoute,
                        evidence: list[dict[str, object]], memory_context: MemoryContext) -> str:
@@ -224,39 +189,31 @@ class InterviewQuestionAgent:
             "recentTurns": memory_context.recent_turns,
             "ragEvidence": evidence,
         }
-        generator = self._model.with_structured_output(GeneratedQuestion)
-        messages = [SystemMessage(content=prompt), HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str))]
-        result = await (self._retry_executor.execute(lambda: generator.ainvoke(messages))
-                        if self._retry_executor is not None else generator.ainvoke(messages))
-        if not isinstance(result, GeneratedQuestion):
-            raise TypeError("model did not return GeneratedQuestion")
+        result = await self._structured_output.invoke(
+            model=self._model, schema=GeneratedQuestion, business_prompt=prompt,
+            input_payload=payload,
+        )
         return result.question
 
 
 class InterviewSummaryAgent:
     """在会话结束时基于完整历史生成综合评分，避免只用最后一轮替代总结。"""
 
-    def __init__(self, model: StructuredChatModel, prompt_loader: PromptLoader,
+    def __init__(self, model: RawChatModel, prompt_loader: PromptLoader,
                  retry_executor: AsyncRetryExecutor | None = None) -> None:
         self._model = model
         self._prompt_loader = prompt_loader
         self._retry_executor = retry_executor
+        self._structured_output = StructuredOutputInvoker(prompt_loader, retry_executor)
 
     async def summarize(self, session: InterviewSession) -> InterviewSummary:
-        evaluator = self._model.with_structured_output(InterviewSummary)
         payload = {
             "difficulty": session.difficulty,
             "plan": session.plan.model_dump(mode="json"),
             "turns": [turn.model_dump(mode="json") for turn in session.turns],
         }
-        messages = [
-            SystemMessage(content=self._prompt_loader.render("interview/summary.md", {})),
-            HumanMessage(content=json.dumps(payload, ensure_ascii=False)),
-        ]
-        result = (
-            await self._retry_executor.execute(lambda: evaluator.ainvoke(messages))
-            if self._retry_executor is not None else await evaluator.ainvoke(messages)
+        return await self._structured_output.invoke(
+            model=self._model, schema=InterviewSummary,
+            business_prompt=self._prompt_loader.render("interview/summary.md", {}),
+            input_payload=payload,
         )
-        if not isinstance(result, InterviewSummary):
-            raise TypeError("model did not return InterviewSummary")
-        return result
