@@ -13,8 +13,10 @@ public record AgentResponse(
         String userId,
         String sessionId,
         String sessionStatus,
-        int stateVersion,
+        long stateVersion,
         String answer,
+        String turnStage,
+        String currentStage,
         Map<String, Object> output,
         AgentError error,
         String timestamp) {

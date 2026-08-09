@@ -41,7 +41,7 @@ management:
         enabled: true
 
 agent:
-  default-target-role: ${AGENT_DEFAULT_TARGET_ROLE:Java 后端}
+  system-knowledge-base-ids: ${AGENT_SYSTEM_KNOWLEDGE_BASE_IDS:}
   file-storage:
     root: ${AGENT_FILE_STORAGE_ROOT:./data/files}
   pdf-font-path: ${AGENT_PDF_FONT_PATH:}
@@ -58,4 +58,3 @@ agent:
     queue-capacity: ${AGENT_ASYNC_QUEUE_CAPACITY:100}
   rate-limit:
     requests-per-minute: ${AGENT_RATE_LIMIT_REQUESTS_PER_MINUTE:60}
-  schedule-expiration-interval-ms: ${AGENT_SCHEDULE_EXPIRATION_INTERVAL_MS:60000}

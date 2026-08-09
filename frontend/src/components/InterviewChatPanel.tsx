@@ -19,9 +19,7 @@ interface InterviewChatPanelProps {
   answer: string;
   onAnswerChange: (answer: string) => void;
   onSubmit: () => void;
-  onCompleteEarly: () => void;
   isSubmitting: boolean;
-  showCompleteConfirm: boolean;
   onShowCompleteConfirm: (show: boolean) => void;
 }
 
@@ -35,9 +33,7 @@ export default function InterviewChatPanel({
   answer,
   onAnswerChange,
   onSubmit,
-  // onCompleteEarly, // 暂时未使用
   isSubmitting,
-  // showCompleteConfirm, // 暂时未使用
   onShowCompleteConfirm
 }: InterviewChatPanelProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);

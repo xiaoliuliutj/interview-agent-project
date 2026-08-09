@@ -26,7 +26,7 @@ Python 下层 Agent 服务
 - Java 从零构建上层业务服务。
 - Python 从零构建下层 Agent 服务。
 - 完成简历/JD 资料、面试计划、六阶段问答、项目追问、基础题、场景题、算法题和总结报告的主链路。
-- RAG 首期复用原项目的知识库处理思路，但用途改为题目构造和简历评价。
+- RAG 首期复用原项目的知识库处理思路，但用途仅为文本面试的题目构造。
 - 记忆、Tools、Skills、MCP、Agent Run 和基础可靠性逐步接入。
 - 支持在虚拟机中部署和演示。
 
@@ -129,15 +129,15 @@ Java 负责业务状态和事务；Python 负责对应的 Agent 计划、阶段�
 
 ### 5.5 异步任务模块
 
-职责：简历解析、简历评价、RAG 文档向量化、报告生成等耗时任务。
+职责：简历解析、简历评价、RAG 文档向量化等耗时任务；文本面试初始化和逐轮回答采用同步请求/响应。
 
 Java 负责任务状态、提交、重试策略和用户查询；Python 执行 Agent 或内容处理任务并返回结果。
 
 ### 5.6 报告与历史模块
 
-职责：保存用户可见的最终报告、阶段评分、问答历史摘要和导出。
+职责：保存用户可见的最终报告、问答历史摘要和导出；阶段评分、记忆摘要和 RAG 证据不进入 Java 业务表。
 
-报告的业务版本由 Java 管理；评分依据和 Agent 运行细节可从下层通过结果快照或 `runId` 关联获取。
+报告的业务版本由 Java 管理；评分依据和 Agent 运行细节只在 Python 下层保留，不通过文本面试响应跨层传递。
 
 ### 5.7 其他原始模块迁移
 
@@ -146,8 +146,8 @@ Java 负责任务状态、提交、重试策略和用户查询；Python 执行 A
 | `modules/interview` | Java 面试业务 + Python 面试 Agent |
 | `modules/resume` | Java 文件/版本/业务关系 + Python 解析/评价 |
 | `modules/knowledgebase` | Java 上传与业务元数据 + Python RAG 处理/检索 |
-| `modules/interviewschedule` | Java 业务模块；解析结果需要 Agent 时调用 Python |
-| `modules/voiceinterview` | 后续扩展；Java 管理 WebSocket 会话，Python 提供语音/Agent 能力 |
+| `modules/interviewschedule` | 已从首期范围移除，不再保留接口、DTO 或页面 |
+| `modules/voiceinterview` | 已从首期范围移除，不再保留接口、DTO 或页面 |
 | 原始 `common/ai` | Python `agent/llm` 和 Agent 运行时；Java 保留调用适配，不保留业务 Prompt |
 | 原始 `common/async`、Redis 限流 | Java 工程化层；Python 只保留 Agent 调用级可靠性 |
 
@@ -202,13 +202,12 @@ FOLLOW_UP / NEXT_QUESTION / NEXT_STAGE / END_INTERVIEW
 1. 文档导入、解析、清洗、切片。
 2. 生成 Embedding 并写入向量索引。
 3. 根据任务类型检索相关片段。
-4. 将检索结果交给题目构造 Agent 或简历评价 Agent。
+4. 将检索结果仅交给已经确定题目方向的题目构造 Agent。
 
 首期 RAG 用途：
 
 - 从预置面经、技能资料和知识库构造八股/场景题。
-- 根据候选人简历和岗位要求检索评价标准。
-- 为回答评价提供知识依据和参考答案。
+- 不参与简历评价、回答评分或路由决策；这些行为由 Prompt 和 Skill 完成。
 
 RAG 不负责业务会话，也不直接返回前端页面。
 
@@ -223,7 +222,7 @@ RAG 不负责业务会话，也不直接返回前端页面。
 
 简历、JD 的权威业务版本仍由 Java 管理；Python 在初始化时保存本次面试所需的简历/JD 快照，并将已确认的简历关键信息作为长期记忆的受版本约束内容。简历更新或删除时，上层必须通过内部事件或接口通知下层失效或重建对应记忆，避免使用旧资料。
 
-每次运行的顺序固定为：读取短期记忆和相关长期记忆 → 组装 Agent 上下文 → 完成决策 → 先持久化问答与会话状态 → 再更新长期摘要。长期记忆更新必须可追溯、幂等且不得覆盖未经确认的原始简历事实。首期可以先采用关系型持久化和摘要更新，不急于引入独立向量记忆框架。
+每次运行的顺序固定为：读取短期记忆和相关长期记忆 → 组装 Agent 上下文 → 使用评分 Skill/Prompt 评估回答（评分节点禁止发起 RAG） → 路由决定追问、下一题、下一阶段或结束，并确定题目方向 → 仅在需要生成具体题目时读取会话级 RAG 缓存，缓存未命中才联合检索系统库和用户库 → 生成题目 → 持久化问答、评分、会话状态和长期摘要。RAG 结果只能作为已确定方向下的题目素材，不能反向决定评分、路由或题目方向。长期记忆更新必须可追溯、幂等且不得覆盖未经确认的原始简历事实。首期可以先采用关系型持久化和摘要更新，不急于引入独立向量记忆框架。
 
 ### 6.7 Python 工程化模块
 
@@ -240,7 +239,8 @@ Java 负责跨业务的事务、异步任务、业务幂等、并发和最终结
 | 业务面试会话 | 主责 | 关联使用 |
 | Agent 面试计划 | 引用/摘要 | 主责 |
 | 当前 Agent 阶段和问题 | 展示快照 | 主责 |
-| 问答业务记录 | 主责 | 运行记录 |
+| 问答业务记录（问题与回答） | 主责 | 运行记录 |
+| 回答评分、记忆摘要与 RAG 证据 | 不负责 | 主责 |
 | Agent Tool 调用轨迹 | 可按需引用 | 主责 |
 | RAG 文档、切片、向量 | 业务元数据 | 主责 |
 | 长期记忆 | 不负责 | 主责 |
@@ -251,7 +251,7 @@ Java 负责跨业务的事务、异步任务、业务幂等、并发和最终结
 
 ### 8.1 初始化 Agent 会话
 
-初始化是特殊操作，可以携带一次资料快照；普通问答不携带上下文。
+初始化是特殊操作，可以携带一次资料快照；普通问答不携带历史上下文，但必须携带上层保存的 Agent 会话状态快照。
 
 ```json
 {
@@ -261,21 +261,20 @@ Java 负责跨业务的事务、异步任务、业务幂等、并发和最终结
   "userId": "user-001",
   "sessionId": "session-001",
   "operation": "agent.session.initialize",
-  "payload": {
-    "candidate": {
-      "candidateId": "candidate-001",
-      "resumeId": "resume-001",
-      "resumeSnapshot": "候选人简历文本"
-    },
-    "job": {
-      "jdId": "jd-001",
-      "targetRole": "Java 后端开发",
-      "jdSnapshot": "岗位要求文本"
-    },
-    "interview": {
-      "durationMinutes": 40,
-      "difficulty": "MEDIUM"
-    }
+  "candidate": {
+    "candidateId": "candidate-001",
+    "resumeId": "resume-001",
+    "resumeText": "候选人简历文本",
+    "jdId": "jd-001",
+    "jdText": "岗位要求文本",
+    "targetRole": "Java 后端开发",
+    "interviewDurationMinutes": 30,
+    "desiredDifficulty": "MEDIUM",
+    "questionCount": 6,
+    "requestedSkillId": "java-backend",
+    "customCategories": [],
+    "systemKnowledgeBaseIds": [],
+    "userKnowledgeBaseIds": []
   },
   "timestamp": "2026-08-07T10:00:00Z"
 }
@@ -283,7 +282,7 @@ Java 负责跨业务的事务、异步任务、业务幂等、并发和最终结
 
 ### 8.2 普通问答
 
-普通轮次只携带身份、运行标识和用户输入，下层从自己的会话持久化中恢复计划与上下文。
+普通轮次只携带身份、运行标识、上层保存的 Agent 状态快照和用户回答；历史消息、记忆和 RAG 证据仍由下层从自己的持久化中恢复。
 
 ```json
 {
@@ -293,7 +292,9 @@ Java 负责跨业务的事务、异步任务、业务幂等、并发和最终结
   "userId": "user-001",
   "sessionId": "session-001",
   "operation": "agent.respond",
-  "question": "我使用 Redis 做缓存。",
+  "sessionStatus": "ACTIVE",
+  "stateVersion": 0,
+  "answer": "我使用 Redis 做缓存。",
   "timestamp": "2026-08-07T10:05:00Z"
 }
 ```
@@ -314,11 +315,9 @@ Java 负责跨业务的事务、异步任务、业务幂等、并发和最终结
   "sessionStatus": "ACTIVE",
   "stateVersion": 4,
   "answer": "请进一步说明 Redis 缓存与数据库一致性如何保证。",
-  "output": {
-    "evaluationSummary": "回答方向正确，但还需要说明写入顺序。",
-    "action": "FOLLOW_UP",
-    "stage": "FUNDAMENTAL"
-  },
+  "turnStage": "FUNDAMENTAL",
+  "currentStage": "SCENARIO",
+  "output": null,
   "error": null,
   "timestamp": "2026-08-07T10:05:04Z"
 }
@@ -326,7 +325,7 @@ Java 负责跨业务的事务、异步任务、业务幂等、并发和最终结
 
 业务码固定三位：`1xx` 正常/部分结果，`2xx` 请求错误，`3xx` 数据一致性，`4xx` 流量保护，`5xx` 模型/网络/工具依赖错误。
 
-`output` 在所有响应中固定存在；没有可展示结构化结果时为 `null`。首期只允许返回评价摘要、受约束动作和当前阶段，禁止返回模型推理过程。Java 将评价摘要作为业务问答历史的一部分持久化，用于后续报告页面。
+`output` 在所有响应中固定存在；没有可展示结构化结果时为 `null`。文本面试响应的 `output` 固定为 `null`，评分、动作、记忆和 RAG 证据均不返回 Java；Java 只保存问题、候选人回答和会话状态。`turnStage` 仅用于标记已回答问题所属阶段，便于历史展示。
 
 ## 9. 关键调用时序
 
@@ -346,37 +345,34 @@ Java：持久化业务会话并返回前端
 ```text
 前端 → Java：提交候选人回答
 Java：校验会话、幂等、并发和任务状态
-Java → Python：发送 userId/sessionId/runId/answer
+Java → Python：发送 userId/sessionId/runId/sessionStatus/stateVersion/answer
 Python：读取 AgentSession
 Python：恢复计划、阶段和最近问答
-Python → LLM：结构化决策
+Python → LLM：先结构化评估，再进行路由决策；只有方向确定后才读取 RAG 缓存或执行联合检索并生成题目
 Python：校验动作、更新会话、持久化 stateVersion
 Python → Java：返回统一响应
 Java：保存业务问答、更新业务状态
 Java → 前端：返回下一条 Agent 消息
 ```
 
-### 9.3 RAG 题目构造或简历评价
+### 9.3 RAG 题目构造
 
 ```text
-Java：提交业务任务
-Java → Python：传递任务类型、候选人快照和 runId
-Python：查询 RAG 文档
-Python：将检索片段放入 Agent 输入
-Python：生成结构化题目或评价结果
-Python：保存 Agent Run
-Python → Java：返回结果
-Java：异步任务落库并通知前端
+Python：先完成评分和题目方向路由
+Python：读取会话证据缓存；未命中时联合查询系统知识库和用户知识库
+Python：将检索片段放入出题 Agent 输入并缓存
+Python → Java：只返回下一条可展示消息和会话状态
+Java：持久化业务会话并通知前端
 ```
 
-简历评价使用 `/v1/agent/evaluate/resume`：请求传递版本化简历输入、目标岗位和可选知识库范围；Python 使用 `RESUME_EVALUATION` 检索证据和外部评价 Prompt，返回统一响应中的结构化 `output`。Java 不解析模型自由文本，只持久化受控评价字段。
+简历评价使用 `/v1/agent/evaluate/resume`：请求只传递版本化简历输入、候选人 ID 和目标岗位；Python 使用外置评价 Prompt 与 Skill 生成结构化 `output`，不检索知识库。Java 只持久化用户可见的简历分析结果，不解析模型自由文本。
 
 ### 9.4 提前结束面试
 
 ```text
 前端 → Java：结束业务面试
 Java：校验用户和会话状态
-Java → Python：发送 agent.session.complete（不携带问答上下文）
+Java → Python：发送 agent.session.complete 与 sessionStatus/stateVersion（不携带问答上下文）
 Python：以 sessionId + userId 校验并关闭 Agent 会话，保留长期记忆
 Python → Java：返回统一完成响应
 Java：持久化业务会话完成状态并返回前端
@@ -397,11 +393,10 @@ Prompt 文件按用途拆分，例如：
 
 ```text
 prompts/interview/planner.md
-prompts/interview/decision.md
 prompts/interview/evaluation.md
+prompts/interview/routing.md
+prompts/interview/question.md
 prompts/resume/analysis.md
-prompts/rag/question-generation.md
-prompts/rag/resume-evaluation.md
 ```
 
 任何可调整的规则、模板、模型参数和知识内容禁止直接写入 Python 业务代码。
@@ -441,7 +436,7 @@ Java 不保存 Python Agent 的系统 Prompt，不复制下层 Agent 决策逻�
 2. Java 代码中不再直接编排具体大模型 Prompt。
 3. Python 可以独立完成面试规划、阶段推进和 Agent 决策。
 4. 不同 `userId`、`sessionId`、`resumeId`、`jdId` 的状态不会串用。
-5. RAG 可以为题目构造和简历评价提供检索依据。
+5. RAG 只为已确定方向的题目构造提供检索依据。
 6. Prompt、Skill、RAG 资料和可修改配置均为外部文件。
 7. Java 负责业务持久化、并发、异步和跨服务可靠性。
 8. Python 负责 Agent 状态、结构化输出、模型调用和 Agent 运行可靠性。

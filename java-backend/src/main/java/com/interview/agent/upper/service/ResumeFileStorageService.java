@@ -18,18 +18,26 @@ public class ResumeFileStorageService {
         this.root = Path.of(root).toAbsolutePath().normalize();
     }
 
-    public StoredFile store(MultipartFile file) throws IOException {
+    public FileDescriptor inspect(MultipartFile file) throws IOException {
         byte[] bytes = file.getBytes();
         String hash = sha256(bytes);
-        String safeName = Path.of(file.getOriginalFilename() == null ? "resume.bin" : file.getOriginalFilename())
-                .getFileName().toString();
-        String key = hash + "/" + safeName;
+        String originalFilename = file.getOriginalFilename();
+        if (originalFilename == null || originalFilename.isBlank()) {
+            throw new IOException("resume filename is required");
+        }
+        String safeName = Path.of(originalFilename).getFileName().toString();
+        return new FileDescriptor(hash, bytes.length, safeName,
+                file.getContentType(), bytes);
+    }
+
+    public StoredFile store(FileDescriptor file, String resumeId) throws IOException {
+        if (resumeId == null || resumeId.isBlank()) throw new IOException("resumeId is required");
+        String key = resumeId + "/" + file.filename();
         Path target = root.resolve(key).normalize();
         if (!target.startsWith(root)) throw new IOException("invalid storage path");
         Files.createDirectories(target.getParent());
-        if (!Files.exists(target)) Files.write(target, bytes, StandardOpenOption.CREATE_NEW);
-        return new StoredFile(hash, key, bytes.length, safeName,
-                file.getContentType() == null ? "application/octet-stream" : file.getContentType(), bytes);
+        Files.write(target, file.bytes(), StandardOpenOption.CREATE_NEW);
+        return new StoredFile(file.hash(), key, file.size(), file.filename(), file.contentType(), file.bytes());
     }
 
     public byte[] read(String key) throws IOException {
@@ -47,6 +55,9 @@ public class ResumeFileStorageService {
 
     public record StoredFile(String hash, String key, long size, String filename,
                              String contentType, byte[] bytes) { }
+
+    public record FileDescriptor(String hash, long size, String filename,
+                                 String contentType, byte[] bytes) { }
 
     private static String sha256(byte[] bytes) {
         try {

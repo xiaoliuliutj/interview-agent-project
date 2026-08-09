@@ -3,6 +3,8 @@ import pytest
 
 from app.api.application import create_app
 
+REQUEST_TIMESTAMP = "2026-08-09T00:00:00Z"
+
 
 @pytest.mark.asyncio
 async def test_skill_catalog_and_jd_parser_are_deterministic() -> None:
@@ -17,7 +19,7 @@ async def test_skill_catalog_and_jd_parser_are_deterministic() -> None:
                 "userId": "catalog-user",
                 "sessionId": "skill-catalog",
                 "operation": "agent.skills.list",
-                "question": "catalog",
+                "timestamp": REQUEST_TIMESTAMP,
             },
         )
         jd_response = await client.post(
@@ -29,7 +31,8 @@ async def test_skill_catalog_and_jd_parser_are_deterministic() -> None:
                 "userId": "catalog-user",
                 "sessionId": "skill-catalog",
                 "operation": "agent.skills.parse-jd",
-                "question": "需要 Java、Spring Boot 和 Redis 经验",
+                "inputText": "需要 Java、Spring Boot 和 Redis 经验",
+                "timestamp": REQUEST_TIMESTAMP,
             },
         )
 

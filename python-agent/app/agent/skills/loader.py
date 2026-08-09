@@ -46,10 +46,10 @@ class SkillRegistry:
         )
 
     def select_for_interview(
-        self, *, target_role: str, jd_text: str, requested_skill_id: str | None = None
+        self, *, target_role: str, jd_text: str | None, requested_skill_id: str | None = None
     ) -> tuple[SkillDefinition, ...]:
         """由下层 Agent 根据职位选择 Skill；上层只传递职位/JD 快照。"""
-        normalized = f"{target_role}\n{jd_text}".lower()
+        normalized = f"{target_role}\n{jd_text or ''}".lower()
         selected = [self.get("interview-coach")]
         if requested_skill_id and requested_skill_id != "custom":
             requested = self.get(requested_skill_id)
@@ -63,7 +63,7 @@ class SkillRegistry:
         unique: dict[str, SkillDefinition] = {item.skill_id: item for item in selected}
         return tuple(unique.values())
 
-    def instructions_for_interview(self, *, target_role: str, jd_text: str) -> tuple[str, ...]:
+    def instructions_for_interview(self, *, target_role: str, jd_text: str | None) -> tuple[str, ...]:
         return tuple(item.instructions for item in self.select_for_interview(
             target_role=target_role, jd_text=jd_text
         ))

@@ -9,11 +9,9 @@ import {
   Database,
   Download,
   Edit3,
-  Eye,
   FileText,
   HardDrive,
   Loader2,
-  MessageSquare,
   RefreshCw,
   Search,
   Trash2,
@@ -25,7 +23,6 @@ import DeleteConfirmDialog from '../components/DeleteConfirmDialog';
 
 interface KnowledgeBaseManagePageProps {
   onUpload: () => void;
-  onChat: () => void;
 }
 
 // 格式化文件大小
@@ -60,6 +57,10 @@ function StatusIcon({ status }: { status: VectorStatus }) {
       return <Clock className="w-4 h-4 text-yellow-500" />;
     case 'FAILED':
       return <AlertCircle className="w-4 h-4 text-red-500" />;
+    case 'DELETING':
+      return <Loader2 className="w-4 h-4 text-amber-500 animate-spin" />;
+    case 'DELETE_FAILED':
+      return <AlertCircle className="w-4 h-4 text-red-500" />;
     default:
       return <CheckCircle className="w-4 h-4 text-green-500" />;
   }
@@ -76,6 +77,10 @@ function getStatusText(status: VectorStatus): string {
       return '待处理';
     case 'FAILED':
       return '失败';
+    case 'DELETING':
+      return '删除中';
+    case 'DELETE_FAILED':
+      return '删除失败';
     default:
       return '未知';
   }
@@ -112,7 +117,7 @@ function StatCard({
   );
 }
 
-export default function KnowledgeBaseManagePage({ onUpload, onChat }: KnowledgeBaseManagePageProps) {
+export default function KnowledgeBaseManagePage({ onUpload }: KnowledgeBaseManagePageProps) {
   const [stats, setStats] = useState<KnowledgeBaseStats | null>(null);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBaseItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -295,7 +300,7 @@ export default function KnowledgeBaseManagePage({ onUpload, onChat }: KnowledgeB
             <Database className="w-7 h-7 text-primary-500" />
             知识库管理
           </h1>
-            <p className="text-slate-500 dark:text-slate-400 mt-1">管理您的知识库文件，查看使用统计</p>
+            <p className="text-slate-500 dark:text-slate-400 mt-1">管理知识库文件与向量索引状态</p>
         </div>
         <div className="flex gap-3">
           <button
@@ -305,18 +310,11 @@ export default function KnowledgeBaseManagePage({ onUpload, onChat }: KnowledgeB
             <Upload className="w-4 h-4" />
             上传知识库
           </button>
-          <button
-            onClick={onChat}
-            className="flex items-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
-          >
-            <MessageSquare className="w-4 h-4" />
-            问答助手
-          </button>
         </div>
       </div>
       {/* 统计卡片 */}
       {stats && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
           <StatCard
             icon={Database}
             label="知识库总数"
@@ -324,16 +322,22 @@ export default function KnowledgeBaseManagePage({ onUpload, onChat }: KnowledgeB
             color="bg-primary-500"
           />
           <StatCard
-            icon={MessageSquare}
-            label="总提问次数"
-            value={stats.totalQuestionCount}
+            icon={CheckCircle}
+            label="已完成索引"
+            value={stats.completedCount}
             color="bg-indigo-500"
           />
           <StatCard
-            icon={Eye}
-            label="总访问次数"
-            value={stats.totalAccessCount}
-            color="bg-emerald-500"
+            icon={Clock}
+            label="等待或处理中"
+            value={stats.processingCount}
+            color="bg-amber-500"
+          />
+          <StatCard
+            icon={AlertCircle}
+            label="索引失败"
+            value={stats.failedCount}
+            color="bg-red-500"
           />
         </div>
       )}
@@ -369,8 +373,6 @@ export default function KnowledgeBaseManagePage({ onUpload, onChat }: KnowledgeB
             >
               <option value="time">按时间排序</option>
               <option value="size">按大小排序</option>
-              <option value="access">按访问排序</option>
-              <option value="question">按提问排序</option>
             </select>
             <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
           </div>
@@ -430,9 +432,6 @@ export default function KnowledgeBaseManagePage({ onUpload, onChat }: KnowledgeB
                 </th>
                   <th className="text-left px-6 py-4 text-sm font-medium text-slate-600 dark:text-slate-300">
                   状态
-                </th>
-                  <th className="text-left px-6 py-4 text-sm font-medium text-slate-600 dark:text-slate-300">
-                  提问
                 </th>
                   <th className="text-left px-6 py-4 text-sm font-medium text-slate-600 dark:text-slate-300">
                   上传时间
@@ -544,9 +543,6 @@ export default function KnowledgeBaseManagePage({ onUpload, onChat }: KnowledgeB
                         {getStatusText(kb.vectorStatus)}
                       </span>
                     </div>
-                  </td>
-                    <td className="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
-                    {kb.questionCount}
                   </td>
                     <td className="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
                     {formatDate(kb.uploadedAt)}

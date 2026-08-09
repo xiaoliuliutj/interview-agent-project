@@ -1,6 +1,6 @@
 """基于 PostgreSQL/pgvector 的 RAG 向量仓库。"""
 
-from sqlalchemy import Integer, JSON, String, Text, select
+from sqlalchemy import Integer, JSON, String, Text, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Mapped, mapped_column
 from pgvector.sqlalchemy import Vector
@@ -41,6 +41,18 @@ class PostgresRagVectorRepository(VectorRepository):
 
     async def add(self, chunks: list[KnowledgeChunk]) -> None:
         async with self._session_factory() as db_session:
+            db_session.add_all([self._to_entity(chunk) for chunk in chunks])
+            await db_session.commit()
+
+    async def replace_for_knowledge_base(
+        self, knowledge_base_id: str, chunks: list[KnowledgeChunk]
+    ) -> None:
+        async with self._session_factory() as db_session:
+            await db_session.execute(
+                delete(RagChunkEntity).where(
+                    RagChunkEntity.knowledge_base_id == knowledge_base_id
+                )
+            )
             db_session.add_all([self._to_entity(chunk) for chunk in chunks])
             await db_session.commit()
 

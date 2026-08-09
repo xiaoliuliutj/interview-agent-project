@@ -1,11 +1,10 @@
-"""基于 RAG 证据的简历评价 Agent。"""
+"""基于简历事实、岗位要求与外置 Skill 的简历评价 Agent。"""
 
 import json
 from typing import Protocol
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.agent.rag.service import RagSearchTool
 from app.agent.skills.loader import SkillRegistry
 from app.core.prompt_loader import PromptLoader
 from app.engineering.reliability.retry import AsyncRetryExecutor
@@ -25,13 +24,11 @@ class ResumeEvaluationAgent:
         model: StructuredChatModel,
         prompt_loader: PromptLoader,
         skill_registry: SkillRegistry,
-        rag_tool: RagSearchTool | None = None,
         retry_executor: AsyncRetryExecutor | None = None,
     ) -> None:
         self._model = model
         self._prompt_loader = prompt_loader
         self._skill_registry = skill_registry
-        self._rag_tool = rag_tool
         self._retry_executor = retry_executor
 
     async def evaluate(
@@ -40,22 +37,10 @@ class ResumeEvaluationAgent:
         subject_id: str,
         input_text: str,
         target_role: str,
-        knowledge_base_ids: tuple[str, ...] = (),
     ) -> ResumeEvaluation:
         normalized_text = input_text.strip()
         if not normalized_text:
             raise ValueError("待评价内容不能为空")
-
-        evidence: list[dict[str, object]] = []
-        if self._rag_tool is not None:
-            results = await self._rag_tool.search_for_resume_evaluation(
-                f"{target_role}\n{normalized_text}",
-                knowledge_base_ids=knowledge_base_ids or None,
-            )
-            evidence = [
-                {"content": item.chunk.content, "score": item.score}
-                for item in results
-            ]
 
         skill = self._skill_registry.get("resume-analyst")
         system_prompt = self._prompt_loader.render(
@@ -65,7 +50,6 @@ class ResumeEvaluationAgent:
             "subjectId": subject_id,
             "targetRole": target_role,
             "resumeText": normalized_text,
-            "ragEvidence": evidence,
         }
         evaluator = self._model.with_structured_output(ResumeEvaluation)
         messages = [

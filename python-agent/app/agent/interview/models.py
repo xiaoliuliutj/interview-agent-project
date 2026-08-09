@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 from typing import Any
 from enum import StrEnum
+from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -37,13 +38,16 @@ class CandidateProfile(BaseModel):
     candidate_id: str
     resume_id: str
     jd_id: str | None = None
-    resume_text: str = ""
-    jd_text: str = ""
+    resume_text: str = Field(min_length=1)
+    jd_text: str | None
     target_role: str
-    interview_duration_minutes: int = Field(default=40, ge=15, le=120)
-    desired_difficulty: Difficulty = Difficulty.MEDIUM
+    interview_duration_minutes: int = Field(ge=15, le=120)
+    desired_difficulty: Difficulty
+    question_count: int = Field(ge=2, le=30)
     requested_skill_id: str | None = None
-    custom_categories: list[dict[str, Any]] = Field(default_factory=list)
+    custom_categories: list[dict[str, Any]]
+    system_knowledge_base_ids: list[str]
+    user_knowledge_base_ids: list[str]
 
 
 class StagePlan(BaseModel):
@@ -83,28 +87,39 @@ class InterviewPlan(BaseModel):
         return next(item for item in self.stages if item.stage == stage)
 
 
-class InterviewDecision(BaseModel):
-    """Agent 对候选人回答的受约束决策，不保存模型思维链。"""
+class InterviewEvaluation(BaseModel):
+    """对当前回答的评分结果；该节点不决定面试流程。"""
 
-    action: InterviewAction
-    next_message: str = Field(min_length=1)
     evaluation_summary: str = Field(min_length=1, max_length=500)
-    # 评估字段由 Agent 在决定下一步动作前生成；保留旧字段以兼容已有模型响应。
-    score: int = Field(default=0, ge=0, le=100)
-    answer_summary: str = Field(default="", max_length=1000)
+    score: int = Field(ge=0, le=100)
+    answer_summary: str = Field(min_length=1, max_length=1000)
     strengths: list[str] = Field(default_factory=list, max_length=10)
     weaknesses: list[str] = Field(default_factory=list, max_length=10)
     preferences: list[str] = Field(default_factory=list, max_length=10)
 
 
+class InterviewRoute(BaseModel):
+    """评分完成后确定的流程动作与下一题方向；不包含评分字段。"""
+
+    action: InterviewAction
+    # 结束面试或直接进入总结时没有下一题方向，不能伪造题目作为占位值。
+    next_topic: str | None = Field(default=None, min_length=1, max_length=300)
+
+
+class GeneratedQuestion(BaseModel):
+    question: str = Field(min_length=1, max_length=1200)
+
+
 class TurnRecord(BaseModel):
+    turn_id: str = Field(default_factory=lambda: uuid4().hex, min_length=1)
+    run_id: str | None = None
     stage: InterviewStage
     question: str
     candidate_answer: str
     action: InterviewAction
     evaluation_summary: str
-    score: int = Field(default=0, ge=0, le=100)
-    answer_summary: str = ""
+    score: int = Field(ge=0, le=100)
+    answer_summary: str = Field(min_length=1, max_length=1000)
     strengths: list[str] = Field(default_factory=list, max_length=10)
     weaknesses: list[str] = Field(default_factory=list, max_length=10)
     preferences: list[str] = Field(default_factory=list, max_length=10)
@@ -124,10 +139,15 @@ class InterviewSummary(BaseModel):
 class AgentRunSnapshot(BaseModel):
     """同一 runId 重放时返回的稳定下层结果。"""
 
+    submitted_answer: str = Field(min_length=1, alias="submittedAnswer")
     answer: str
     session_status: SessionStatus
     state_version: int = Field(ge=0)
+    turn_stage: InterviewStage | None = Field(default=None, alias="turnStage")
+    current_stage: InterviewStage = Field(alias="currentStage")
     output: dict[str, object] | None = None
+
+    model_config = {"populate_by_name": True}
 
 
 class InterviewSession(BaseModel):
@@ -138,7 +158,7 @@ class InterviewSession(BaseModel):
     candidate_id: str
     resume_id: str
     jd_id: str | None = None
-    difficulty: Difficulty = Difficulty.MEDIUM
+    difficulty: Difficulty
     selected_skills: list[str] = Field(default_factory=list)
     plan: InterviewPlan
     status: SessionStatus = SessionStatus.ACTIVE
@@ -147,12 +167,18 @@ class InterviewSession(BaseModel):
     followup_count: int = Field(default=0, ge=0)
     state_version: int = Field(default=0, ge=0)
     current_question: str
+    system_knowledge_base_ids: list[str] = Field(default_factory=list)
+    user_knowledge_base_ids: list[str] = Field(default_factory=list)
+    # 生成当前题目时命中的资料快照。下一轮评分只能读取该缓存，不能再次检索。
+    current_question_evidence: list[dict[str, object]] = Field(default_factory=list)
+    rag_evidence_cache: dict[str, list[dict[str, object]]] = Field(default_factory=dict)
     turns: list[TurnRecord] = Field(default_factory=list)
     asked_question_catalog: list[str] = Field(default_factory=list)
     final_summary: str | None = None
     final_evaluation: InterviewSummary | None = None
     interrupted: bool = False
     initialization_run_id: str | None = None
+    initialization_fingerprint: str | None = None
     run_snapshots: dict[str, AgentRunSnapshot] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

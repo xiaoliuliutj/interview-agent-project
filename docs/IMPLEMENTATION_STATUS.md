@@ -1,90 +1,23 @@
 # 当前重构落地状态
 
-本文补充 `PROJECT_SPECIFICATION.md`，记录已经落地的代码边界和可验证证据。代码修改仍需用户明确同意后才能提交或推送。
+## 项目边界
 
-## 1. 目录与职责
+系统由 React 前端、Java 上层和 Python 下层 Agent 组成。当前只保留三条业务线：简历分析、文本面试、知识库管理与面试内部 RAG。知识库不提供独立聊天入口，面试日程也不属于当前产品范围。
 
-```text
-frontend/                 原 React 前端，保持页面与交互
-java-backend/             Java 上层：业务、持久化、并发、异步、Gateway
-python-agent/             Python 下层：Agent、Prompt、Skill、记忆、RAG、模型
-infrastructure/           虚拟机/容器部署与数据库初始化
-reference/                原始项目，只作迁移参考
-```
+## Python 下层
 
-Java 不保存 Python Agent 的 Prompt、Skill、RAG 决策或记忆上下文。Python 普通问答不接收上层历史消息；它按 `userId + sessionId` 恢复短期记忆，并按 `userId`恢复长期记忆。
+- 面试 Agent：规划、评分、路由、出题、会话记忆与总结。
+- 评分节点只使用 `interview-coach` Skill 与 `evaluation.md`，路由节点使用 `routing.md`；两者都不调用 RAG。
+- 流程严格为：评估 → 决定追问/换题/换阶段 → 确定题目方向 → 读取 RAG 缓存 → 缓存未命中时联合检索系统库和用户库 → 生成题目并缓存证据。
+- RAG 证据、评分、记忆和工具轨迹只保留在 Python 下层。
+- 简历评价完成后只会写入已激活的当前简历版本的用户长期画像；旧任务迟到返回时无法覆盖最新版画像。
 
-## 2. Python 下层已落地能力
+## Java 上层
 
-| 能力 | 代码位置 | 说明 |
-| --- | --- | --- |
-| 配置、契约、异常 | `app/core/` | 配置来自 `.env`/JSON；响应统一为 `AgentResponse`；业务码按首位分类 |
-| 面试 Agent | `app/agent/interview/` | InterviewPlan、六阶段状态机、受约束决策和状态版本 |
-| 双层记忆 | `app/agent/memory/` | 默认最近 5 轮短期窗口（配置允许 3～5）；用户级长期摘要、简历快照、偏好和薄弱点 |
-| MCP 参考工具 | `app/agent/mcp/` | 只读查询外置面试基础资料；stdio 启动，受长度和结果数量限制 |
-| Skill 目录适配 | `app/agent/skills/`、`SkillController` | Python 读取外置 Skill 目录并做确定性 JD 分类，已提供 Java、Python、前端、算法、系统设计和 AI Agent 方向；Java 只代理给原 React 技能接口 |
-| 简历评价 Agent | `app/agent/evaluation/` | RAG 可选证据、结构化评分、总结、优势和建议；Java 异步持久化结果 |
-| RAG | `app/agent/rag/` | 默认 800 Token 无重叠切片、批量 10、pgvector 检索、KB 过滤与本地回退；不向调用方暴露 chunk 正文 |
-| 日程解析 | `app/agent/schedule/` | 通过外置 Prompt 和结构化输出解析自然语言面试安排，Java 负责时间范围校验和持久化 |
-| HTTP 入口 | `app/api/application.py` | 健康检查、初始化、问答和统一异常响应 |
-| 持久化 | `app/engineering/persistence/` | PostgreSQL 会话、长期记忆和 pgvector 仓库；无数据库时不伪造持久化 |
-| 可靠性与幂等 | `app/engineering/reliability/`、`app/engineering/idempotency/` | LLM 有限异步重试；`runId` 保存稳定响应快照并防止重复推进 |
+- 负责身份、业务会话、简历文件、知识库上传/管理、异步任务、重试、并发与对外展示。
+- 通过固定 JSON 契约调用 Python，不在 Java 重复实现 Agent 决策。
+- 知识库接口只负责上传、索引、列表、分类、下载、删除和重建索引；检索仅由文本面试内部使用。
 
-面试 Agent 的 RAG 只使用 `QUESTION_GENERATION` 和 `RESUME_EVALUATION`；另为原 React 知识库页面保留独立的 `KNOWLEDGE_BASE_QUERY` 检索验证用途。Embedding 未配置时 Agent 仍能运行基础流程，但不会伪造检索依据；配置后 Planner 和 Decision Agent 自动通过 Tool 获取检索证据。
+## 部署与验证
 
-## 3. Java 上层已落地能力
-
-- `InterviewService` 负责用户、候选人、简历、JD 的业务校验和面试业务会话。
-- 简历上传由 Java 使用 Apache Tika 提取文本后再提交评价任务，避免把 PDF/DOCX 二进制内容直接当作 UTF-8 文本交给下层。
-- `PythonAgentGateway` 负责固定 JSON 调用，不在 Java 重复实现 Agent。
-- 下层问答响应的 `output.evaluationSummary`、`action` 和 `stage` 由 Java 持久化到面试轮次；它们是可展示 Agent 结果，不包含模型思维链。
-- `AgentCallExecutor` 负责有限重试；仅网络异常和下层可重试 5xx 重试。
-- `InterviewSessionEntity` 使用 JPA `@Version`，`InterviewSessionPersistenceService` 负责事务边界和并发版本校验。
-- 文字面试兼容层已持久化会话列表、未完成会话恢复、答案草稿、提前结束、删除和问答历史；草稿不调用下层，正式答案才调用 Python Agent。
-- 提前结束通过 `agent.session.complete` 同步关闭下层会话；关闭请求不带问答上下文，且不会删除按用户保留的长期记忆。
-- `InterviewTaskEntity`、RabbitMQ durable queue、`RabbitAgentWorkConsumer` 和 `RabbitInterviewTaskConsumer` 共同实现面试初始化、简历分析和知识库向量化的持久化异步任务生命周期；消息只保存资源 ID，失败进入重试和死信队列。
-- 知识库管理接口全部按 `X-User-Id` 校验资料归属，RAG 会话选择知识库时也会再次校验。
-- `LegacyInterviewController` 保留 React 原有的核心面试/简历上传路径，并通过 Facade 转换为新领域 DTO；简历和面试导出均生成中文字体支持的真实 PDF。`KnowledgeBaseController`、`RagChatController` 和 `InterviewScheduleController` 已提供旧路径适配；日程解析由 Python 下层结构化抽取，Java 提供过期状态定时推进。语音面试仍是说明书中定义的后续扩展，不纳入首期核心链路。
-
-Java 已使用 IntelliJ JBR 21 和 IDEA 内置 Maven 完成 `-DskipTests compile`；当前工程仍没有 Java 测试类，RabbitMQ/PostgreSQL/真实下层服务的集成测试需要在依赖服务启动后执行。
-
-部署资产已静态核对：Java 长文本实体显式映射为 PostgreSQL `TEXT`，避免 `@Lob` 与初始化脚本类型不一致；Compose 会等待 Python `/health` 通过后启动 Java，Nginx 对 `/api/` 关闭响应缓冲以支持 SSE。当前本机没有 Docker，未执行容器构建或启动验证。
-
-## 4. 上下层关键链路
-
-```text
-React
-  → Java POST /api/interviews
-  → Java 校验并持久化业务会话
-  → Java 调 Python /v1/agent/sessions/initialize（携带一次性资料快照）
-  → Python 规划、写入 AgentSession 与长期简历记忆
-  → Java 返回开场问题
-
-React
-  → Java POST /api/interviews/{sessionId}/answers
-  → Java 校验用户和业务会话
-  → Python /v1/agent/respond（只携带 userId/sessionId/runId/answer）
-  → Python 读取短期/长期记忆、可选 RAG、调用模型并持久化
-  → Java 以乐观锁保存业务轮次和状态
-```
-
-## 5. 验证记录
-
-使用 `D:\Anaconda\envs\inter-guide\python.exe` 执行：
-
-```text
-python -m pytest tests -q       28 passed
-python -m compileall -q app     通过
-```
-
-测试覆盖：面试阶段推进、重复会话、短期/长期记忆、统一 API 响应、RAG 切片、Embedding 批次、知识库过滤回退、Skill 目录以及 MCP 只读工具边界。PostgreSQL、真实 Embedding、RabbitMQ、Java 运行时和完整容器启动仍属于待环境补齐后的集成验证。
-
-前端使用 Node 24 运行时直接执行 TypeScript 检查和 Vite 生产构建已通过；项目部署要求 Node 20 LTS，当前系统 Node 16 不作为验证依据。
-
-真实模型验证：已使用当前本地 OpenAI-compatible 配置完成聊天连通、六阶段面试规划和单轮受约束 Decision Agent 决策验证；测试过程未输出敏感配置。数据库和 Embedding 未配置，因此上述验证不替代持久化/RAG 集成测试。
-
-日程解析真实模型验证：模型能够返回结构化标题和时区；对于“明天/下午三点/一小时”等明确中文表达，下层确定性补全得到带时区的开始和结束时间。验证过程未输出密钥。
-
-## 6. 虚拟机部署
-
-`infrastructure/docker-compose.yml` 提供 PostgreSQL/pgvector、Redis、Python Agent、Java 上层和 React/Nginx 五个服务；`infrastructure/postgres/init/001-schema.sql` 初始化双方所需表和向量扩展。模型密钥只从虚拟机环境变量或未提交的 `.env` 注入，不进入镜像和 Git。
+`infrastructure/docker-compose.yml` 提供完整虚拟机部署。Python 测试使用 `D:\Anaconda\envs\inter-guide\python.exe -m pytest tests -q -p no:cacheprovider`；Java 和容器集成测试在虚拟机执行。

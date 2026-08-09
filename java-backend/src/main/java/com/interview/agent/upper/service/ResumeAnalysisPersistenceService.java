@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Collection;
 
 @Service
 public class ResumeAnalysisPersistenceService {
@@ -23,12 +24,9 @@ public class ResumeAnalysisPersistenceService {
     }
 
     @Transactional
-    public ResumeAnalysisEntity create(String resumeId) {
-        return repository.save(new ResumeAnalysisEntity(resumeId));
+    public ResumeAnalysisEntity create(String resumeId, String targetRole) {
+        return repository.save(new ResumeAnalysisEntity(resumeId, targetRole));
     }
-
-    @Transactional
-    public void markProcessing(Long id) { required(id).markProcessing(); }
 
     @Transactional
     public void complete(Long id, AgentResponse response) {
@@ -57,6 +55,31 @@ public class ResumeAnalysisPersistenceService {
 
     @Transactional
     public void deleteByResumeId(String resumeId) { repository.deleteByResumeId(resumeId); }
+
+    @Transactional
+    public void cancelActiveForResumeIds(Collection<String> resumeIds) {
+        if (resumeIds.isEmpty()) return;
+        repository.findByResumeIdInAndStatusIn(resumeIds, List.of("PENDING", "PROCESSING"))
+                .forEach(ResumeAnalysisEntity::cancel);
+    }
+
+    @Transactional
+    public ResumeAnalysisEntity beginAttempt(Long id) {
+        ResumeAnalysisEntity analysis = required(id);
+        if (!analysis.canBeginAttempt()) return null;
+        analysis.beginAttempt();
+        return analysis;
+    }
+
+    @Transactional
+    public void recordRetryableFailure(Long id, String message) {
+        required(id).recordRetryableFailure(message);
+    }
+
+    @Transactional
+    public void cancel(Long id) { required(id).cancel(); }
+
+    public boolean isCancelled(Long id) { return required(id).isCancelled(); }
 
     private ResumeAnalysisEntity required(Long id) {
         return repository.findById(id)

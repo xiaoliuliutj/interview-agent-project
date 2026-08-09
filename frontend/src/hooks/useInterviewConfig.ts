@@ -1,62 +1,31 @@
-import { useState, useEffect } from 'react';
-import { skillApi, type SkillDTO, type CategoryDTO } from '../api/skill';
+import { useEffect, useState } from 'react';
+import { skillApi, type CategoryDTO, type SkillDTO } from '../api/skill';
 import { historyApi, type ResumeListItem } from '../api/history';
 import { getSkillIcon } from '../utils/skillIcons';
-import { loadInterviewPreferences } from '../utils/interviewPreferences';
 
-export type InterviewMode = 'text' | 'voice';
 export type Difficulty = 'junior' | 'mid' | 'senior';
 
 export const DIFFICULTY_OPTIONS: { value: Difficulty; label: string; desc: string }[] = [
-  { value: 'junior', label: '校招', desc: '0-1 年' },
-  { value: 'mid', label: '中级', desc: '1-3 年' },
-  { value: 'senior', label: '高级', desc: '3 年+' },
+  { value: 'junior', label: '校招', desc: '基础优先' },
+  { value: 'mid', label: '中级', desc: '基础与场景平衡' },
+  { value: 'senior', label: '高级', desc: '场景与项目优先' },
 ];
 
 export const CUSTOM_SKILL_ID = 'custom';
-export const DEFAULT_SKILL_ID = 'java-backend';
-export const DEFAULT_LLM_PROVIDER = 'dashscope';
 export const MIN_JD_LENGTH = 50;
 
-export interface InterviewConfigState {
-  mode: InterviewMode;
-  skillId: string;
-  difficulty: Difficulty;
-  skills: SkillDTO[];
-  loadingSkills: boolean;
-  showMore: boolean;
-  resumeId: number | undefined;
-  resumes: ResumeListItem[];
-  llmProvider: string;
-  questionCount: number;
-  plannedDuration: number;
-  customJdText: string;
-  parsedCustomJdText: string;
-  customCategories: CategoryDTO[];
-  parsingJd: boolean;
-  jdNeedsReparse: boolean;
-  isCustomStartDisabled: boolean;
-}
-
-export function useInterviewConfig(options?: {
-  defaultMode?: InterviewMode;
-  defaultResumeId?: number;
-  autoLoad?: boolean;
-}) {
-  const { defaultMode = 'text', defaultResumeId, autoLoad = true } = options ?? {};
-  const preferences = loadInterviewPreferences();
-
-  const [mode, setMode] = useState<InterviewMode>(defaultMode);
-  const [skillId, setSkillId] = useState(DEFAULT_SKILL_ID);
+export function useInterviewConfig(options?: { defaultResumeId?: string; autoLoad?: boolean }) {
+  const { defaultResumeId, autoLoad = true } = options ?? {};
+  const [skillId, setSkillId] = useState<string | undefined>(undefined);
   const [difficulty, setDifficulty] = useState<Difficulty>('mid');
   const [skills, setSkills] = useState<SkillDTO[]>([]);
   const [loadingSkills, setLoadingSkills] = useState(false);
   const [showMore, setShowMore] = useState(false);
-  const [resumeId, setResumeId] = useState<number | undefined>(undefined);
+  const [resumeId, setResumeId] = useState<string | undefined>(defaultResumeId);
   const [resumes, setResumes] = useState<ResumeListItem[]>([]);
-  const [questionCount, setQuestionCount] = useState<number>(6);
+  const [questionCount, setQuestionCount] = useState(6);
   const [plannedDuration, setPlannedDuration] = useState(30);
-  const [llmProvider, setLlmProvider] = useState(preferences.defaultLlmProvider);
+  const [targetRole, setTargetRole] = useState('');
   const [customJdText, setCustomJdText] = useState('');
   const [parsedCustomJdText, setParsedCustomJdText] = useState('');
   const [customCategories, setCustomCategories] = useState<CategoryDTO[]>([]);
@@ -64,8 +33,8 @@ export function useInterviewConfig(options?: {
 
   const isCustomSkill = skillId === CUSTOM_SKILL_ID;
   const jdNeedsReparse = parsedCustomJdText.length > 0 && customJdText !== parsedCustomJdText;
-  const isCustomStartDisabled = isCustomSkill
-    && (customCategories.length === 0 || jdNeedsReparse || parsingJd);
+  const isCustomStartDisabled = isCustomSkill &&
+    (customCategories.length === 0 || jdNeedsReparse || parsingJd);
 
   const loadSkills = async () => {
     setLoadingSkills(true);
@@ -73,79 +42,50 @@ export function useInterviewConfig(options?: {
       const data = await skillApi.listSkills();
       setSkills(data);
       return data;
-    } catch (err) {
-      console.error('Failed to load skills:', err);
-      return [];
     } finally {
       setLoadingSkills(false);
     }
   };
 
   const loadResumes = async () => {
-    try {
-      const data = await historyApi.getResumes();
-      setResumes(data);
-    } catch (err) {
-      console.error('Failed to load resumes:', err);
-    }
+    const data = await historyApi.getResumes();
+    setResumes(data);
+    return data;
   };
 
   const handleParseJd = async () => {
-    if (!customJdText || customJdText.length < MIN_JD_LENGTH) {
-      alert(`JD 内容太少（至少 ${MIN_JD_LENGTH} 字），请补充后重试`);
-      return;
+    if (customJdText.trim().length < MIN_JD_LENGTH) {
+      throw new Error(`JD 至少需要 ${MIN_JD_LENGTH} 个字符`);
     }
     setParsingJd(true);
     try {
-      const categories = await skillApi.parseJd(customJdText);
+      const categories = await skillApi.parseJd(customJdText.trim());
       setCustomCategories(categories);
       setParsedCustomJdText(customJdText);
-    } catch {
-      alert('JD 解析失败，请重试或选择预设主题');
     } finally {
       setParsingJd(false);
     }
   };
 
   useEffect(() => {
-    if (autoLoad) {
-      setMode(defaultMode);
-      if (defaultResumeId != null) {
-        setResumeId(defaultResumeId);
-        setShowMore(true);
-      }
-      loadSkills();
-      loadResumes();
+    if (!autoLoad) return;
+    if (defaultResumeId != null) {
+      setResumeId(defaultResumeId);
+      setShowMore(true);
     }
+    void Promise.all([loadSkills(), loadResumes()]);
+    // These actions intentionally run once when the configuration becomes active.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoLoad, defaultMode, defaultResumeId]);
+  }, [autoLoad, defaultResumeId]);
 
   return {
-    // State
-    mode, setMode,
-    skillId, setSkillId,
-    difficulty, setDifficulty,
-    skills, setSkills,
-    loadingSkills,
-    showMore, setShowMore,
-    resumeId, setResumeId,
-    resumes,
-    questionCount, setQuestionCount,
-    plannedDuration, setPlannedDuration,
-    llmProvider, setLlmProvider,
-    customJdText, setCustomJdText,
-    parsedCustomJdText,
-    customCategories,
-    parsingJd,
-    jdNeedsReparse,
-    isCustomStartDisabled,
-    isCustomSkill,
-    // Actions
-    loadSkills,
-    loadResumes,
-    handleParseJd,
-    // Helpers
-    getSkillIcon,
-    get selectedSkill() { return skills.find(s => s.id === skillId); },
+    skillId, setSkillId, difficulty, setDifficulty, skills, setSkills, loadingSkills,
+    showMore, setShowMore, resumeId, setResumeId, resumes,
+    questionCount, setQuestionCount, plannedDuration, setPlannedDuration,
+    targetRole, setTargetRole,
+    customJdText, setCustomJdText, parsedCustomJdText, customCategories,
+    parsingJd, jdNeedsReparse, isCustomStartDisabled, isCustomSkill,
+    loadSkills, loadResumes, handleParseJd, getSkillIcon,
+    selectedSkill: skills.find(skill => skill.id === skillId),
   };
 }

@@ -1,97 +1,97 @@
 package com.interview.agent.upper.service;
 
 import com.interview.agent.upper.agent.AgentGateway;
+import com.interview.agent.upper.agent.dto.AgentCompleteRequest;
 import com.interview.agent.upper.agent.dto.AgentInitializeRequest;
 import com.interview.agent.upper.agent.dto.AgentRespondRequest;
-import com.interview.agent.upper.agent.dto.AgentCompleteRequest;
 import com.interview.agent.upper.agent.dto.AgentResponse;
-import com.interview.agent.upper.api.dto.CreateInterviewRequest;
 import com.interview.agent.upper.api.dto.InterviewView;
+import com.interview.agent.upper.api.dto.StartInterviewRequest;
 import com.interview.agent.upper.domain.CandidateEntity;
 import com.interview.agent.upper.domain.InterviewSessionEntity;
-import com.interview.agent.upper.domain.JobDescriptionEntity;
-import com.interview.agent.upper.domain.ResumeEntity;
 import com.interview.agent.upper.domain.InterviewSessionStatus;
+import com.interview.agent.upper.domain.ResumeEntity;
 import com.interview.agent.upper.repository.CandidateRepository;
-import com.interview.agent.upper.repository.JobDescriptionRepository;
 import com.interview.agent.upper.repository.ResumeRepository;
 import org.springframework.stereotype.Service;
-import org.springframework.beans.factory.annotation.Value;
 
-import java.util.UUID;
+import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
+/** Text interview application service. All external requests use the single public DTO. */
 @Service
 public class InterviewService {
     private final CandidateRepository candidateRepository;
     private final ResumeRepository resumeRepository;
-    private final JobDescriptionRepository jobDescriptionRepository;
     private final InterviewSessionPersistenceService sessionPersistence;
     private final AgentGateway agentGateway;
-    private final String defaultTargetRole;
+    private final InterviewKnowledgeBaseSelectionService knowledgeBaseSelection;
 
-    public InterviewService(
-            CandidateRepository candidateRepository,
-            ResumeRepository resumeRepository,
-            JobDescriptionRepository jobDescriptionRepository,
-            InterviewSessionPersistenceService sessionPersistence,
-            AgentGateway agentGateway,
-            @Value("${agent.default-target-role:Java 后端}") String defaultTargetRole) {
+    public InterviewService(CandidateRepository candidateRepository,
+                            ResumeRepository resumeRepository,
+                            InterviewSessionPersistenceService sessionPersistence,
+                            AgentGateway agentGateway,
+                            InterviewKnowledgeBaseSelectionService knowledgeBaseSelection) {
         this.candidateRepository = candidateRepository;
         this.resumeRepository = resumeRepository;
-        this.jobDescriptionRepository = jobDescriptionRepository;
         this.sessionPersistence = sessionPersistence;
         this.agentGateway = agentGateway;
-        this.defaultTargetRole = defaultTargetRole;
+        this.knowledgeBaseSelection = knowledgeBaseSelection;
     }
 
-    public InterviewView start(CreateInterviewRequest request) {
-        CandidateEntity candidate = requireCandidate(request);
-        ResumeEntity resume = requireResume(request.resumeId(), candidate.getId());
-        JobDescriptionEntity jd = requireJobDescription(request.jdId());
+    public InterviewView start(String userId, StartInterviewRequest request) {
+        ResumeEntity resume = ownedResume(request.resumeId(), userId);
+        CandidateEntity candidate = candidateRepository.findById(resume.getCandidateId())
+                .orElseThrow(() -> new BusinessException("CANDIDATE_NOT_FOUND", "candidate not found"));
+        if (!resume.getId().equals(candidate.getCurrentResumeId())) {
+            throw new BusinessException("RESUME_NOT_CURRENT",
+                    "a new interview can only be created from the candidate's current resume");
+        }
+        InterviewKnowledgeBaseSelectionService.Selection knowledgeBases = knowledgeBaseSelection.selectForUser(userId);
+        String difficulty = normalizeDifficulty(request.desiredDifficulty());
         String sessionId = UUID.randomUUID().toString();
-        sessionPersistence.create(new InterviewSessionEntity(
-                sessionId, request.userId(), candidate.getId(), resume.getId(),
-                jd == null ? null : jd.getId(),
-                request.totalQuestions() == null ? 6 : request.totalQuestions()));
-        InterviewSessionEntity createdSession = sessionPersistence.load(sessionId);
-        createdSession.configure(request.skillId(), normalizeDifficulty(request.desiredDifficulty()));
-        sessionPersistence.saveConfiguration(createdSession);
+        sessionPersistence.createConfigured(
+                new InterviewSessionEntity(sessionId, userId, candidate.getId(), resume.getId(), null,
+                        request.questionCount()),
+                request.skillId(), difficulty);
 
-        AgentResponse response;
+        String runId = UUID.randomUUID().toString();
         try {
-            response = agentGateway.initialize(toAgentRequest(request, sessionId, candidate, resume, jd));
+            AgentResponse response = agentGateway.initialize(new AgentInitializeRequest(
+                    "v1", UUID.randomUUID().toString(), runId, userId, sessionId,
+                    "agent.session.initialize",
+                    new AgentInitializeRequest.CandidateSnapshot(
+                            candidate.getId(), resume.getId(), null, resume.getContent(), request.jdText(),
+                            request.targetRole(), request.interviewDurationMinutes(), difficulty,
+                            request.questionCount(),
+                            request.skillId(), request.customCategories(),
+                            knowledgeBases.systemKnowledgeBaseIds(), knowledgeBases.userKnowledgeBaseIds()),
+                    Instant.now()));
+            requireMatchingResponse(response, "AGENT_INITIALIZE_FAILED", userId, sessionId, runId);
+            sessionPersistence.activate(sessionId, response);
+            return toView(sessionPersistence.load(sessionId));
         } catch (RuntimeException error) {
             sessionPersistence.markFailed(sessionId);
             throw error;
         }
-        if (!isSuccessful(response)) {
-            sessionPersistence.markFailed(sessionId);
-            throw new BusinessException("AGENT_INITIALIZE_FAILED", "下层 Agent 初始化失败");
-        }
-        sessionPersistence.activate(sessionId, response);
-        return toView(sessionPersistence.load(sessionId));
     }
 
-    public InterviewView submitAnswer(
-            String sessionId, String userId, String answer, String requestedRunId) {
-        InterviewSessionEntity session = sessionPersistence.load(sessionId);
-        if (!session.getUserId().equals(userId)) {
-            throw new BusinessException("SESSION_ACCESS_DENIED", "无权访问该面试会话");
+    public InterviewView submitAnswer(String sessionId, String userId, String answer, String runId) {
+        if (runId == null || runId.isBlank()) {
+            throw new BusinessException("RUN_ID_REQUIRED", "runId is required for an idempotent answer submission");
         }
-        if (session.getStatus() != InterviewSessionStatus.ACTIVE) {
-            throw new BusinessException("SESSION_NOT_ACTIVE", "当前面试会话不能继续回答");
+        InterviewSessionEntity session = ownedSession(sessionId, userId);
+        if (session.getStatus() != InterviewSessionStatus.ACTIVE
+                && session.getStatus() != InterviewSessionStatus.PAUSED) {
+            throw new BusinessException("SESSION_NOT_ACTIVE", "interview session is not active");
         }
-        String runId = requestedRunId == null || requestedRunId.isBlank()
-                ? UUID.randomUUID().toString()
-                : requestedRunId;
         AgentResponse response = agentGateway.respond(new AgentRespondRequest(
-                "v1", UUID.randomUUID().toString(), runId, userId, sessionId, answer));
-        if (!isSuccessful(response)) {
-            throw new BusinessException("AGENT_RESPONSE_FAILED", "下层 Agent 处理失败");
-        }
-        sessionPersistence.applyAnswer(
-                sessionId, session.getStateVersion(), runId, answer, response);
+                "v1", UUID.randomUUID().toString(), runId, userId, sessionId,
+                "agent.respond", session.getStatus().name(), session.getAgentStateVersion(), answer,
+                Instant.now()));
+        requireMatchingResponse(response, "AGENT_RESPONSE_FAILED", userId, sessionId, runId);
+        sessionPersistence.applyAnswer(sessionId, session.getStateVersion(), runId, answer, response);
         return toView(sessionPersistence.load(sessionId));
     }
 
@@ -104,37 +104,36 @@ public class InterviewService {
     }
 
     public InterviewView findUnfinished(String userId, String resumeId) {
-        return sessionPersistence.findUnfinished(userId, resumeId)
-                .map(this::toView).orElse(null);
-    }
-
-    public void saveDraft(String sessionId, String userId, String answer) {
-        sessionPersistence.saveDraft(sessionId, userId, answer);
+        return sessionPersistence.findUnfinished(userId, resumeId).map(this::toView).orElse(null);
     }
 
     public void complete(String sessionId, String userId) {
-        InterviewSessionEntity session = sessionPersistence.load(sessionId);
-        if (!session.getUserId().equals(userId)) {
-            throw new BusinessException("SESSION_ACCESS_DENIED", "无权访问该面试会话");
-        }
-        if (session.getStatus() == InterviewSessionStatus.COMPLETED) {
-            return;
-        }
+        InterviewSessionEntity session = ownedSession(sessionId, userId);
+        if (session.getStatus() == InterviewSessionStatus.COMPLETED) return;
+        String runId = UUID.randomUUID().toString();
         AgentResponse response = agentGateway.complete(new AgentCompleteRequest(
-                "v1", UUID.randomUUID().toString(), UUID.randomUUID().toString(),
-                userId, sessionId));
-        if (!isSuccessful(response)) {
-            throw new BusinessException("AGENT_COMPLETE_FAILED", "下层 Agent 会话关闭失败");
-        }
+                "v1", UUID.randomUUID().toString(), runId, userId, sessionId,
+                "agent.session.complete", session.getStatus().name(), session.getAgentStateVersion(),
+                Instant.now()));
+        requireMatchingResponse(response, "AGENT_COMPLETE_FAILED", userId, sessionId, runId);
         sessionPersistence.completeFromAgent(sessionId, userId, response);
     }
 
+    public void pause(String sessionId, String userId) {
+        InterviewSessionEntity session = ownedSession(sessionId, userId);
+        if (session.getStatus() != InterviewSessionStatus.ACTIVE) return;
+        String runId = UUID.randomUUID().toString();
+        AgentResponse response = agentGateway.complete(new AgentCompleteRequest(
+                "v1", UUID.randomUUID().toString(), runId, userId, sessionId,
+                "agent.session.pause", session.getStatus().name(), session.getAgentStateVersion(),
+                Instant.now()));
+        requireMatchingResponse(response, "AGENT_PAUSE_FAILED", userId, sessionId, runId);
+        sessionPersistence.pauseFromAgent(sessionId, userId, response);
+    }
+
     public void delete(String sessionId, String userId) {
-        InterviewSessionEntity session = sessionPersistence.load(sessionId);
-        if (!session.getUserId().equals(userId)) {
-            throw new BusinessException("SESSION_ACCESS_DENIED", "无权访问该面试会话");
-        }
-        if (session.getStatus() != InterviewSessionStatus.COMPLETED) {
+        InterviewSessionEntity session = ownedSession(sessionId, userId);
+        if (session.getStatus() == InterviewSessionStatus.ACTIVE || session.getStatus() == InterviewSessionStatus.PAUSED) {
             complete(sessionId, userId);
         }
         sessionPersistence.delete(sessionId, userId);
@@ -144,71 +143,59 @@ public class InterviewService {
         return sessionPersistence.turns(sessionId);
     }
 
-    private CandidateEntity requireCandidate(CreateInterviewRequest request) {
-        CandidateEntity candidate = candidateRepository.findById(request.candidateId())
-                .orElseThrow(() -> new BusinessException("CANDIDATE_NOT_FOUND", "候选人不存在"));
-        if (!candidate.getUserId().equals(request.userId())) {
-            throw new BusinessException("CANDIDATE_ACCESS_DENIED", "候选人不属于当前用户");
-        }
-        return candidate;
-    }
-
-    private ResumeEntity requireResume(String resumeId, String candidateId) {
+    private ResumeEntity ownedResume(String resumeId, String userId) {
         ResumeEntity resume = resumeRepository.findById(resumeId)
-                .orElseThrow(() -> new BusinessException("RESUME_NOT_FOUND", "简历不存在"));
-        if (!resume.getCandidateId().equals(candidateId)) {
-            throw new BusinessException("RESUME_CANDIDATE_MISMATCH", "简历与候选人不匹配");
+                .orElseThrow(() -> new BusinessException("RESUME_NOT_FOUND", "resume not found"));
+        CandidateEntity candidate = candidateRepository.findById(resume.getCandidateId())
+                .orElseThrow(() -> new BusinessException("CANDIDATE_NOT_FOUND", "candidate not found"));
+        if (!userId.equals(candidate.getUserId())) {
+            throw new BusinessException("RESUME_ACCESS_DENIED", "resume does not belong to current user");
         }
         return resume;
     }
 
-    private JobDescriptionEntity requireJobDescription(String jdId) {
-        if (jdId == null) {
-            return null;
+    private InterviewSessionEntity ownedSession(String sessionId, String userId) {
+        InterviewSessionEntity session = sessionPersistence.load(sessionId);
+        if (!userId.equals(session.getUserId())) {
+            throw new BusinessException("SESSION_ACCESS_DENIED", "session does not belong to current user");
         }
-        return jobDescriptionRepository.findById(jdId)
-                .orElseThrow(() -> new BusinessException("JD_NOT_FOUND", "JD 不存在"));
+        return session;
     }
 
-    private AgentInitializeRequest toAgentRequest(
-            CreateInterviewRequest request,
-            String sessionId,
-            CandidateEntity candidate,
-            ResumeEntity resume,
-            JobDescriptionEntity jd) {
-        return new AgentInitializeRequest(
-                "v1", UUID.randomUUID().toString(), UUID.randomUUID().toString(),
-                request.userId(), sessionId,
-                new AgentInitializeRequest.CandidateSnapshot(
-                        candidate.getId(), resume.getId(), jd == null ? null : jd.getId(),
-                        resume.getContent(), jd == null ? "" : jd.getContent(),
-                        jd == null ? defaultTargetRole : jd.getTitle(), 40,
-                        normalizeDifficulty(request.desiredDifficulty()), request.skillId(),
-                        request.customCategories() == null ? List.of() : request.customCategories()));
-    }
-
-    static String normalizeDifficulty(String value) {
-        if (value == null || value.isBlank()) return "MEDIUM";
+    public static String normalizeDifficulty(String value) {
         return switch (value.strip().toUpperCase()) {
-            case "JUNIOR", "EASY" -> "EASY";
-            case "MID", "MEDIUM" -> "MEDIUM";
-            case "SENIOR", "HARD" -> "HARD";
-            default -> throw new BusinessException("DIFFICULTY_INVALID", "difficulty must be junior, mid, senior, EASY, MEDIUM or HARD");
+            case "EASY", "JUNIOR" -> "EASY";
+            case "MEDIUM", "MID" -> "MEDIUM";
+            case "HARD", "SENIOR" -> "HARD";
+            default -> throw new BusinessException("DIFFICULTY_INVALID", "difficulty must be EASY, MEDIUM or HARD");
         };
     }
 
-    private boolean isSuccessful(AgentResponse response) {
-        return response.code() >= 100 && response.code() < 200;
+    private static void requireSuccess(AgentResponse response, String errorCode) {
+        if (response == null || response.code() < 100 || response.code() >= 200) {
+            String message = response != null && response.error() != null
+                    ? response.error().message() : "lower agent processing failed";
+            throw new BusinessException(errorCode, message);
+        }
+    }
+
+    private static void requireMatchingResponse(
+            AgentResponse response, String errorCode, String userId, String sessionId, String runId) {
+        requireSuccess(response, errorCode);
+        if (!userId.equals(response.userId())
+                || !sessionId.equals(response.sessionId())
+                || !runId.equals(response.runId())) {
+            throw new BusinessException(
+                    "AGENT_RESPONSE_IDENTITY_MISMATCH",
+                    "lower Agent response does not match the submitted session or run");
+        }
     }
 
     private InterviewView toView(InterviewSessionEntity session) {
-        return new InterviewView(
-                session.getId(), session.getUserId(), session.getCandidateId(),
-                session.getResumeId(), session.getJdId(), session.getSkillId(), session.getDifficulty(),
-                session.getTotalQuestions(),
-                session.getStatus().name(), session.getStateVersion(),
-                session.getCurrentQuestion(), session.getOverallScore(), session.getFinalSummary(),
-                session.getEvaluateStatus(), session.getEvaluateError(),
+        return new InterviewView(session.getId(), session.getUserId(), session.getCandidateId(), session.getResumeId(),
+                session.getJdId(), session.getSkillId(), session.getDifficulty(), session.getTotalQuestions(),
+                session.getStatus().name(), session.getAgentStateVersion(), session.getCurrentQuestion(),
+                session.getCurrentStage(),
                 session.getCreatedAt(), session.getUpdatedAt());
     }
 }

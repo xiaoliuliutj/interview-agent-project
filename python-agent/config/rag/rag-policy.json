@@ -5,8 +5,7 @@
   "defaultTopK": 4,
   "defaultMinScore": 0.35,
   "fallbackCandidateMultiplier": 3,
-  "defaultKnowledgeBaseIds": ["interview-basics"],
-  "allowedUseCases": ["QUESTION_GENERATION", "RESUME_EVALUATION", "KNOWLEDGE_BASE_QUERY"],
+  "allowedUseCases": ["QUESTION_GENERATION"],
   "cacheTtlSeconds": 300,
   "cacheMaxEntries": 256
 }

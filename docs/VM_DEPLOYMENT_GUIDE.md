@@ -15,7 +15,7 @@
 | `python-agent` | 下层 Agent、Skill、记忆、RAG、模型调用 | 否，仅容器网络 |
 | `postgres` | 业务数据、长期记忆与 pgvector 向量数据 | 否，仅容器网络 |
 | `redis` | 缓存与简单限流辅助 | 否，仅容器网络 |
-| `rabbitmq` | 面试初始化、简历分析、知识库向量化等异步任务 | 否，仅容器网络 |
+| `rabbitmq` | 简历分析、知识库向量化等异步任务 | 否，仅容器网络 |
 
 访问链路如下：
 
@@ -144,7 +144,7 @@ MODEL_NAME=你的聊天模型名称
 MODEL_API_KEY=你的模型密钥
 MODEL_BASE_URL=https://你的模型服务地址/v1
 
-# 不配置 Embedding 时，文字面试和简历评价可运行；RAG 检索不可用。
+# 不配置 Embedding 时，简历评价可运行；由于系统知识库不能完成索引，文本面试不能启动。
 EMBEDDING_MODEL=
 EMBEDDING_API_KEY=
 EMBEDDING_BASE_URL=
@@ -254,7 +254,7 @@ http://<虚拟机公网IP或内网IP>/
 1. 打开文字面试页面，创建面试会话。
 2. 提交一轮回答，确认下一题与评价能够返回。
 3. 上传一份简历，观察异步分析任务状态。
-4. 上传知识库资料；已配置 Embedding 时，等待向量化完成后再进行 RAG 问答。
+4. 上传知识库资料；已配置 Embedding 时，等待向量化完成后，文本面试会在确定题目方向后使用这些资料。
 5. 导出 PDF，确认 CJK 字体配置正确。
 
 ## 8. 常用运维命令
@@ -369,7 +369,7 @@ docker compose --env-file .env logs python-agent
 3. RabbitMQ 与 Python Agent 日志是否有异常。
 4. 文档是否属于当前用户，且在查询时被选择。
 
-未配置 Embedding 时，基础面试流程可以运行，但 RAG 不会返回伪造结果。
+未配置 Embedding 或系统知识库尚未完成索引时，Java 会拒绝创建文本面试，避免在缺少规定知识库范围时静默降级；先完成系统知识库导入和索引，再启动面试。
 
 ### 10.5 中文 PDF 导出失败
 

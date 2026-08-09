@@ -16,6 +16,7 @@ public class ResumeAnalysisEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
     private String resumeId;
+    private String targetRole;
     private String status;
     private Integer overallScore;
     private Integer contentScore;
@@ -33,20 +34,37 @@ public class ResumeAnalysisEntity {
     private String issuesJson;
     @Column(length = 500)
     private String error;
+    private int retryCount;
+    private Instant lastAttemptAt;
     private Instant createdAt;
     private Instant updatedAt;
 
     protected ResumeAnalysisEntity() {
     }
 
-    public ResumeAnalysisEntity(String resumeId) {
+    public ResumeAnalysisEntity(String resumeId, String targetRole) {
         this.resumeId = resumeId;
+        this.targetRole = targetRole;
         this.status = "PENDING";
         this.createdAt = Instant.now();
         this.updatedAt = this.createdAt;
     }
 
-    public void markProcessing() { this.status = "PROCESSING"; this.updatedAt = Instant.now(); }
+    public void beginAttempt() {
+        this.status = "PROCESSING";
+        this.retryCount++;
+        this.lastAttemptAt = Instant.now();
+        this.updatedAt = this.lastAttemptAt;
+    }
+
+    public boolean canBeginAttempt() {
+        return "PENDING".equals(status) || "PROCESSING".equals(status);
+    }
+
+    public void recordRetryableFailure(String message) {
+        this.error = truncate(message);
+        this.updatedAt = Instant.now();
+    }
 
     public void complete(
             int overallScore, int contentScore, int structureScore, int skillMatchScore,
@@ -77,12 +95,22 @@ public class ResumeAnalysisEntity {
 
     public void fail(String error) {
         this.status = "FAILED";
-        this.error = error == null ? "简历评价失败" : error.substring(0, Math.min(500, error.length()));
+        this.error = truncate(error);
         this.updatedAt = Instant.now();
     }
 
+    public void cancel() {
+        if ("PENDING".equals(status) || "PROCESSING".equals(status)) {
+            this.status = "CANCELLED";
+            this.updatedAt = Instant.now();
+        }
+    }
+
+    public boolean isCancelled() { return "CANCELLED".equals(status); }
+
     public Long getId() { return id; }
     public String getResumeId() { return resumeId; }
+    public String getTargetRole() { return targetRole; }
     public String getStatus() { return status; }
     public Integer getOverallScore() { return overallScore; }
     public Integer getContentScore() { return contentScore; }
@@ -95,6 +123,12 @@ public class ResumeAnalysisEntity {
     public String getSuggestionsJson() { return suggestionsJson; }
     public String getIssuesJson() { return issuesJson; }
     public String getError() { return error; }
+    public int getRetryCount() { return retryCount; }
+    public Instant getLastAttemptAt() { return lastAttemptAt; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
+
+    private String truncate(String message) {
+        return message == null ? "简历评价失败" : message.substring(0, Math.min(500, message.length()));
+    }
 }

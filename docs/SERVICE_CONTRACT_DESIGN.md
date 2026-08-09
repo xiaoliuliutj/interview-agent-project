@@ -82,7 +82,7 @@ orchestrator-agent
 
 子 Agent 不应直接共享可变状态。每个子任务接收只读输入，独立生成结果，最后由编排 Agent 进行聚合；记忆写入应由统一的结果处理阶段完成，避免并行写入互相覆盖。
 
-本项目首期不实现复杂的多 Agent 自主协作，只保留该架构思想。若需要展示并行能力，优先实现有限的固定并行分支，例如同时进行“回答评分”和“知识点检索”，再由编排层合并结果。
+本项目首期不实现复杂的多 Agent 自主协作，只保留该架构思想。文本面试不允许将“回答评分”和“知识库检索”并行：必须先评分、再路由并确定题目方向，最后才读取缓存或检索知识库。未来的并行能力只能用于与该顺序无依赖的独立任务。
 
 实现上可采用 Python `asyncio.gather` 处理短耗时独立任务，或使用 LangGraph 的并行分支与状态合并；长耗时任务再引入队列。无论采用哪种方式，都必须处理超时、部分失败、取消、并发上限、幂等和模型调用成本。
 
@@ -116,14 +116,16 @@ FastAPI 的异步请求处理、数据库连接池和模型客户端的并发请
   "userId": "user-001",
   "sessionId": "session-001",
   "operation": "agent.respond",
-  "question": "Redis 的 RDB 和 AOF 有什么区别？",
+  "sessionStatus": "ACTIVE",
+  "stateVersion": 4,
+  "answer": "我使用 Redis 做缓存。",
   "timestamp": "2026-08-06T12:00:00Z"
 }
 ```
 
-必填字段：`apiVersion`、`requestId`、`runId`、`userId`、`sessionId`、`operation`、`question` 和 `timestamp`。请求不携带会话上下文、历史消息或上层业务字段；下层根据 `userId + sessionId` 读取和维护自己的会话状态。
+必填字段：`apiVersion`、`requestId`、`runId`、`userId`、`sessionId`、`operation`、`sessionStatus`、`stateVersion`、`answer` 和 `timestamp`。请求不携带历史消息、评分结果、记忆内容或上层业务字段；`sessionStatus` 与 `stateVersion` 是上层保存的 Agent 会话状态快照，用于下层拒绝过期并发请求，历史上下文仍由下层按 `userId + sessionId` 自行读取。
 
-会话提前结束使用独立的 `agent.session.complete` 请求，不复用问答的 `question` 字段：它只携带 `apiVersion`、`requestId`、`runId`、`userId`、`sessionId`、`operation` 和 `timestamp`。下层将对应 Agent 会话置为 `COMPLETED` 并返回同一响应结构；用户级长期记忆不删除。Java 只有在下层成功关闭后才提交自己的业务完成状态，重试同一关闭操作应得到稳定的已完成结果。
+会话提前结束使用独立的 `agent.session.complete` 请求，不复用问答的 `answer` 字段；它还必须携带当前 `sessionStatus` 和 `stateVersion`。下层将对应 Agent 会话置为 `COMPLETED` 并返回同一响应结构；用户级长期记忆不删除。Java 只有在下层成功关闭后才提交自己的业务完成状态，重试同一关闭操作应得到稳定的已完成结果。
 
 ### 6.2 下层返回上层
 
@@ -139,11 +141,9 @@ FastAPI 的异步请求处理、数据库连接池和模型客户端的并发请
   "sessionStatus": "ACTIVE",
   "stateVersion": 4,
   "answer": "RDB 是定期生成内存快照，恢复速度较快但可能丢失最近数据；AOF 记录写命令，数据可靠性更高，但文件通常更大。",
-  "output": {
-    "evaluationSummary": "回答覆盖了两种持久化方式的核心差异。",
-    "action": "NEXT_QUESTION",
-    "stage": "FUNDAMENTAL"
-  },
+  "turnStage": "FUNDAMENTAL",
+  "currentStage": "SCENARIO",
+  "output": null,
   "error": null,
   "timestamp": "2026-08-06T12:00:04Z"
 }
@@ -185,22 +185,28 @@ FastAPI 的异步请求处理、数据库连接池和模型客户端的并发请
 }
 ```
 
-`code` 是业务结果码，不替代 HTTP 状态码；例如 HTTP 200 也可以携带处理中或业务失败结果，便于上层稳定解析 Agent 执行结果。正式实现时，Java DTO、Python Pydantic 模型和契约测试必须以本节为唯一来源。
+`code` 是业务结果码，不替代 HTTP 状态码；例如 HTTP 200 也可以携带处理中或业务失败结果，便于上层稳定解析 Agent 执行结果。正式实现时，Java DTO、Python Pydantic 模型和契约测试必须以本节为唯一来源。`turnStage` 只标识本次已回答问题所属的 Agent 阶段，供上层保存历史展示，不承载评分或检索信息。
 
-成功、处理中、部分结果和失败必须使用完全相同的响应字段集合，不能通过删字段或更换 JSON 层级表达状态差异。上层根据 `code`、`status`、`sessionStatus`、`answer`、`output` 和 `error` 的值解析结果；`output` 仅承载受控、可展示的结构化结果（如评价摘要、动作和阶段），不返回模型思维链。下层不返回 `nextQuestion` 等上层页面业务字段。
+成功、处理中、部分结果和失败必须使用完全相同的响应字段集合，不能通过删字段或更换 JSON 层级表达状态差异。上层根据 `code`、`status`、`sessionStatus`、`answer`、`output` 和 `error` 的值解析结果；文本面试的 `output` 固定为 `null`，评分、动作、记忆和 RAG 证据均不跨层返回。下层不返回 `nextQuestion` 等上层页面业务字段。
 
 记忆的检索范围使用组合条件，而不是拼接 ID：短期记忆按 `(userId, sessionId)` 隔离，只保留最近 3–5 轮完整问答与当前会话状态；长期记忆按 `userId` 隔离，保存用户历史摘要、已确认的简历信息及其他长期有效信息。一次运行的状态和事件按 `runId` 管理。`agentId` 仅用于选择 Agent 配置，不作为记忆主键。
 
 普通问答请求仍禁止携带 `history`、`memory`、简历全文或 JD 全文。下层使用请求中的 `userId + sessionId` 自行读取这两层记忆；初始化请求才可携带资料快照，供下层建立本次会话与长期记忆索引。
 
 为兼容原 React 的技能选择页，下层还接受 `agent.skills.list` 和
-`agent.skills.parse-jd` 两个只读操作；它们复用同一响应信封，`question` 仅在解析操作中
+`agent.skills.parse-jd` 两个只读操作；它们复用同一响应信封，`inputText` 仅在解析操作中
 承载待分类的 JD 文本，处理过程使用外置关键词配置，不调用大模型。Java 只做鉴权、重试和
 结果转发，不复制 Skill 指令。
 
 当后续支持用户自定义 Agent 配置时，再增加独立的 `agentInstanceId` 或 `agentProfileId`。该实例仍然不应替代用户和会话标识。
 
 ## 4. 后续协议演进方向
+
+### 面试响应阶段字段
+
+文本面试响应同时提供 `turnStage` 和 `currentStage`。前者用于记录本次回答对应的题目阶段，后者用于上层恢复当前会话阶段；二者只用于状态同步与历史展示，不暴露评分、记忆或 RAG 证据。
+
+会话暂停使用 `agent.session.pause`，暂停只保存 `PAUSED` 状态，不归档会话记忆；恢复时直接提交回答并携带 `PAUSED` 状态和当前版本，不重新初始化 Agent。
 
 首期实现以第 6 节的具体 DTO 为唯一契约。未来如果引入多 Agent 编排或通用任务信封，
 可以在新版本中增加独立的 `agentId`、`agentProfileId` 或 `payload`，但不能改变首期

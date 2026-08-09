@@ -19,13 +19,38 @@ public class KnowledgeBasePersistenceService {
     }
 
     @Transactional
+    public void markIndexPending(String id) {
+        required(id).markVectorPending();
+    }
+
+    @Transactional
+    public boolean markIndexing(String id) {
+        return required(id).markVectorProcessing();
+    }
+
+    @Transactional
     public void markIndexFailed(String id, String message) {
         required(id).markVectorFailed(message == null ? "RAG 索引失败" : message.substring(0, Math.min(500, message.length())));
     }
 
     @Transactional
-    public void incrementQuestionCount(String id) {
-        required(id).incrementQuestionCount();
+    public void markDeleting(String id) {
+        required(id).markDeleting();
+    }
+
+    @Transactional
+    public void deleteMarked(String id) {
+        KnowledgeBaseEntity entity = required(id);
+        if (!entity.isDeleting()) {
+            throw new BusinessException("KNOWLEDGE_BASE_DELETE_STATE_INVALID",
+                    "knowledge base is not marked for deletion");
+        }
+        repository.delete(entity);
+    }
+
+    @Transactional
+    public void markDeleteFailed(String id, String message) {
+        required(id).markDeleteFailed(message);
     }
 
     private KnowledgeBaseEntity required(String id) {

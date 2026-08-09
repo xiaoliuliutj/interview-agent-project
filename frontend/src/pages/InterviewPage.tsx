@@ -7,33 +7,60 @@ import InterviewPageHeader from '../components/InterviewPageHeader';
 import type {InterviewQuestion, InterviewSession} from '../types/interview';
 import type {Difficulty} from '../components/UnifiedInterviewModal';
 import type {CategoryDTO} from '../api/skill';
-import { CUSTOM_SKILL_ID } from '../hooks/useInterviewConfig';
 
 interface Message {
   type: 'interviewer' | 'user';
   content: string;
   category?: string;
   questionIndex?: number;
+  submissionRunId?: string;
+}
+
+interface PendingAnswerSubmission {
+  sessionId: string;
+  question: string;
+  answer: string;
+  runId: string;
+}
+
+function pendingAnswerStorageKey(sessionId: string): string {
+  return `interview.pending-answer.${sessionId}`;
+}
+
+function loadPendingAnswerSubmission(sessionId: string): PendingAnswerSubmission | null {
+  try {
+    const raw = sessionStorage.getItem(pendingAnswerStorageKey(sessionId));
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<PendingAnswerSubmission>;
+    if (value.sessionId !== sessionId
+      || typeof value.question !== 'string'
+      || typeof value.answer !== 'string'
+      || typeof value.runId !== 'string') return null;
+    return value as PendingAnswerSubmission;
+  } catch {
+    return null;
+  }
 }
 
 interface InterviewProps {
   resumeText: string;
-  resumeId?: number;
+  resumeId?: string;
   sessionIdToResume?: string;
   initialConfig?: {
     questionCount?: number;
-    llmProvider?: string;
     skillId?: string;
     difficulty?: Difficulty;
     customCategories?: CategoryDTO[];
     jdText?: string;
+    targetRole?: string;
+    interviewDurationMinutes?: number;
   };
   onBack: () => void;
   onInterviewComplete: () => void;
 }
 
 export default function Interview({
-  resumeText,
+  resumeText: _resumeText,
   resumeId,
   sessionIdToResume,
   initialConfig,
@@ -49,13 +76,15 @@ export default function Interview({
   const [isCreating, setIsCreating] = useState(false);
   const [showCompleteConfirm, setShowCompleteConfirm] = useState(false);
   const startedRef = useRef(false);
+  const pendingAnswerSubmissionRef = useRef<PendingAnswerSubmission | null>(null);
 
-  const questionCount = initialConfig?.questionCount ?? 8;
-  const llmProvider = initialConfig?.llmProvider ?? 'dashscope';
-  const skillId = initialConfig?.skillId ?? 'java-backend';
-  const difficulty = initialConfig?.difficulty ?? 'mid';
-  const customCategories = initialConfig?.customCategories;
+  const questionCount = initialConfig?.questionCount;
+  const skillId = initialConfig?.skillId;
+  const difficulty = initialConfig?.difficulty;
+  const customCategories = initialConfig?.customCategories ?? [];
   const jdText = initialConfig?.jdText;
+  const targetRole = initialConfig?.targetRole;
+  const interviewDurationMinutes = initialConfig?.interviewDurationMinutes;
 
   // 自动开始面试（恢复已有会话 或 创建新会话）
   useEffect(() => {
@@ -75,16 +104,18 @@ export default function Interview({
     setError('');
 
     try {
+      if (!resumeId || !questionCount || !difficulty || !targetRole || !interviewDurationMinutes) {
+        throw new Error('缺少创建面试所需的简历、岗位、难度、题量或时长参数');
+      }
       const newSession = await interviewApi.createSession({
-        resumeText,
-        questionCount,
         resumeId,
-        forceCreate: true,
-        llmProvider,
+        targetRole,
+        interviewDurationMinutes,
+        questionCount,
         skillId,
         difficulty,
-        customCategories: skillId === CUSTOM_SKILL_ID ? customCategories : undefined,
-        jdText: skillId === CUSTOM_SKILL_ID ? jdText : undefined,
+        jdText,
+        customCategories,
       });
 
       initSession(newSession);
@@ -124,6 +155,11 @@ export default function Interview({
       const idx = Math.min(s.currentQuestionIndex, s.questions.length - 1);
       const currentQ = s.questions[idx];
       setCurrentQuestion(currentQ);
+      const pending = loadPendingAnswerSubmission(s.sessionId);
+      if (pending && pending.question === currentQ.question && currentQ.userAnswer === null) {
+        pendingAnswerSubmissionRef.current = pending;
+        setAnswer(pending.answer);
+      }
 
       // 重建消息历史
       const restoredMessages: Message[] = [];
@@ -150,23 +186,47 @@ export default function Interview({
     if (!answer.trim() || !session || !currentQuestion) return;
 
     setIsSubmitting(true);
+    setError('');
+    const submittedAnswer = answer.trim();
+    const previous = pendingAnswerSubmissionRef.current;
+    const isRetry = previous !== null
+      && previous.sessionId === session.sessionId
+      && previous.question === currentQuestion.question
+      && previous.answer === submittedAnswer;
+    const submission: PendingAnswerSubmission = isRetry && previous
+      ? previous
+      : {
+          sessionId: session.sessionId,
+          question: currentQuestion.question,
+          answer: submittedAnswer,
+          runId: crypto.randomUUID(),
+        };
+    pendingAnswerSubmissionRef.current = submission;
+    sessionStorage.setItem(pendingAnswerStorageKey(session.sessionId), JSON.stringify(submission));
 
-    const userMessage: Message = {
-      type: 'user',
-      content: answer
-    };
-    setMessages(prev => [...prev, userMessage]);
+    if (!isRetry) {
+      const userMessage: Message = {
+        type: 'user', content: submittedAnswer, submissionRunId: submission.runId,
+      };
+      setMessages(prev => [
+        ...prev.filter(message => message.submissionRunId !== previous?.runId),
+        userMessage,
+      ]);
+    }
 
     try {
       const response = await interviewApi.submitAnswer({
         sessionId: session.sessionId,
-        questionIndex: currentQuestion.questionIndex,
-        answer: answer.trim()
+        answer: submittedAnswer,
+        runId: submission.runId,
       });
 
+      pendingAnswerSubmissionRef.current = null;
+      sessionStorage.removeItem(pendingAnswerStorageKey(session.sessionId));
       setAnswer('');
 
       if (response.hasNextQuestion && response.nextQuestion) {
+        setSession(response.session);
         setCurrentQuestion(response.nextQuestion);
         setMessages(prev => [...prev, {
           type: 'interviewer',
@@ -267,9 +327,7 @@ export default function Interview({
           answer={answer}
           onAnswerChange={setAnswer}
           onSubmit={handleSubmitAnswer}
-          onCompleteEarly={handleCompleteEarly}
           isSubmitting={isSubmitting}
-          showCompleteConfirm={showCompleteConfirm}
           onShowCompleteConfirm={setShowCompleteConfirm}
         />
       </motion.div>

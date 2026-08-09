@@ -1,106 +1,92 @@
 import { request } from './request';
-import type {
-  CreateInterviewRequest,
-  CurrentQuestionResponse,
-  InterviewReport,
-  InterviewSession,
-  SubmitAnswerRequest,
-  SubmitAnswerResponse
-} from '../types/interview';
+import type { CreateInterviewRequest, InterviewQuestion, InterviewSession, SubmitAnswerRequest, SubmitAnswerResponse } from '../types/interview';
 
-export interface TextSessionMeta {
+interface InterviewView {
   sessionId: string;
-  skillId: string;
+  resumeId: string;
+  skillId: string | null;
   difficulty: string;
-  resumeId: number | null;
   totalQuestions: number;
-  status: string;
-  evaluateStatus: string | null;
-  evaluateError: string | null;
-  overallScore: number | null;
+  status: InterviewSession['status'];
+  stateVersion: number;
+  currentQuestion: string | null;
+  currentStage: string | null;
   createdAt: string;
-  completedAt: string | null;
+  updatedAt: string;
 }
 
+interface InterviewTurnView {
+  index: number;
+  stage: string;
+  question: string;
+  answer: string | null;
+}
+
+interface InterviewDetailView { session: InterviewView; turns: InterviewTurnView[]; }
+
+function toQuestion(turn: InterviewTurnView): InterviewQuestion {
+  return { questionIndex: turn.index, question: turn.question, type: 'AGENT', category: turn.stage, userAnswer: turn.answer };
+}
+
+function toSession(view: InterviewView, turns: InterviewTurnView[] = []): InterviewSession {
+  const questions = turns.map(toQuestion);
+  if ((view.status === 'ACTIVE' || view.status === 'PAUSED') && view.currentQuestion) {
+    questions.push({ questionIndex: questions.length, question: view.currentQuestion, type: 'AGENT', category: view.currentStage || 'UNKNOWN', userAnswer: null });
+  }
+  return {
+    ...view,
+    currentQuestionIndex: Math.max(0, questions.length - 1),
+    questions,
+  };
+}
+
+export interface TextSessionMeta extends InterviewView {}
+
 export const interviewApi = {
-  /**
-   * 列出所有文字面试会话
-   */
   async listSessions(): Promise<TextSessionMeta[]> {
-    return request.get<TextSessionMeta[]>('/api/interview/sessions');
+    return request.get<InterviewView[]>('/api/interviews');
   },
 
-  /**
-   * 创建面试会话
-   */
-  async createSession(req: CreateInterviewRequest): Promise<InterviewSession> {
-    return request.post<InterviewSession>('/api/interview/sessions', req, {
-      timeout: 180000, // 3分钟超时，AI生成问题需要时间
-    });
+  async createSession(input: CreateInterviewRequest): Promise<InterviewSession> {
+    const view = await request.post<InterviewView>('/api/interviews', {
+      resumeId: input.resumeId,
+      targetRole: input.targetRole,
+      interviewDurationMinutes: input.interviewDurationMinutes,
+      questionCount: input.questionCount,
+      desiredDifficulty: input.difficulty,
+      skillId: input.skillId ?? null,
+      jdText: input.jdText ?? null,
+      customCategories: input.customCategories,
+    }, { timeout: 180000 });
+    return toSession(view);
   },
 
-  /**
-   * 获取会话信息
-   */
   async getSession(sessionId: string): Promise<InterviewSession> {
-    return request.get<InterviewSession>(`/api/interview/sessions/${sessionId}`);
+    const detail = await request.get<InterviewDetailView>(`/api/interviews/${sessionId}`);
+    return toSession(detail.session, detail.turns);
   },
 
-  /**
-   * 获取当前问题
-   */
-  async getCurrentQuestion(sessionId: string): Promise<CurrentQuestionResponse> {
-    return request.get<CurrentQuestionResponse>(`/api/interview/sessions/${sessionId}/question`);
+  async submitAnswer(input: SubmitAnswerRequest): Promise<SubmitAnswerResponse> {
+    const view = await request.post<InterviewView>(`/api/interviews/${input.sessionId}/answers`, {
+      answer: input.answer,
+      runId: input.runId,
+    }, { timeout: 180000 });
+    const session = toSession(view);
+    const nextQuestion = session.status === 'ACTIVE' && session.questions.length > 0
+      ? session.questions[session.questions.length - 1] : null;
+    return { session, hasNextQuestion: nextQuestion !== null, nextQuestion };
   },
 
-  /**
-   * 提交答案
-   */
-  async submitAnswer(req: SubmitAnswerRequest): Promise<SubmitAnswerResponse> {
-    return request.post<SubmitAnswerResponse>(
-      `/api/interview/sessions/${req.sessionId}/answers`,
-      { questionIndex: req.questionIndex, answer: req.answer },
-      {
-        timeout: 180000, // 3分钟超时
-      }
-    );
-  },
-
-  /**
-   * 获取面试报告
-   */
-  async getReport(sessionId: string): Promise<InterviewReport> {
-    return request.get<InterviewReport>(`/api/interview/sessions/${sessionId}/report`, {
-      timeout: 180000, // 3分钟超时，AI评估需要时间
-    });
-  },
-
-  /**
-   * 查找未完成的面试会话
-   */
-  async findUnfinishedSession(resumeId: number): Promise<InterviewSession | null> {
-    try {
-      return await request.get<InterviewSession>(`/api/interview/sessions/unfinished/${resumeId}`);
-    } catch {
-      // 如果没有未完成的会话，返回null
-      return null;
-    }
-  },
-
-  /**
-   * 暂存答案（不进入下一题）
-   */
-  async saveAnswer(req: SubmitAnswerRequest): Promise<void> {
-    return request.put<void>(
-      `/api/interview/sessions/${req.sessionId}/answers`,
-      { questionIndex: req.questionIndex, answer: req.answer }
-    );
-  },
-
-  /**
-   * 提前交卷
-   */
   async completeInterview(sessionId: string): Promise<void> {
-    return request.post<void>(`/api/interview/sessions/${sessionId}/complete`);
+    await request.post<void>(`/api/interviews/${sessionId}/complete`);
+  },
+
+  async pauseInterview(sessionId: string): Promise<void> {
+    await request.post<void>(`/api/interviews/${sessionId}/pause`);
+  },
+
+  async findUnfinishedSession(resumeId: string): Promise<InterviewSession | null> {
+    const view = await request.get<InterviewView | null>(`/api/interviews/unfinished/${resumeId}`);
+    return view ? toSession(view) : null;
   },
 };

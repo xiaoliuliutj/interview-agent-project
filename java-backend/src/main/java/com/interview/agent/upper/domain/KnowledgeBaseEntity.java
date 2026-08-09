@@ -30,8 +30,6 @@ public class KnowledgeBaseEntity {
     private String vectorStatus;
     private String vectorError;
     private int chunkCount;
-    private long accessCount;
-    private long questionCount;
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -61,15 +59,48 @@ public class KnowledgeBaseEntity {
         this.updatedAt = Instant.now();
     }
 
+    public void markVectorPending() {
+        this.vectorStatus = "PENDING";
+        this.vectorError = null;
+        this.updatedAt = Instant.now();
+    }
+
+    public boolean markVectorProcessing() {
+        if (hasDeletionRequest()) return false;
+        this.vectorStatus = "PROCESSING";
+        this.vectorError = null;
+        this.updatedAt = Instant.now();
+        return true;
+    }
+
     public void markVectorFailed(String error) {
         this.vectorStatus = "FAILED";
         this.vectorError = error;
         this.updatedAt = Instant.now();
     }
 
+    public void markDeleting() {
+        this.vectorStatus = "DELETING";
+        this.vectorError = null;
+        this.updatedAt = Instant.now();
+    }
+
+    public void markDeleteFailed(String error) {
+        this.vectorStatus = "DELETE_FAILED";
+        this.vectorError = error == null ? "vector cleanup failed"
+                : error.substring(0, Math.min(500, error.length()));
+        this.updatedAt = Instant.now();
+    }
+
+    public boolean isDeleting() { return "DELETING".equals(vectorStatus); }
+
+    /** 删除失败并不代表资料可以重新索引；只有重新执行删除才能推进该状态。 */
+    public boolean hasDeletionRequest() {
+        return "DELETING".equals(vectorStatus) || "DELETE_FAILED".equals(vectorStatus);
+    }
+
     public void updateCategory(String category) { this.category = category; this.updatedAt = Instant.now(); }
     public void attachOriginalBytes(byte[] bytes) { this.originalBytes = bytes; }
-    public void incrementQuestionCount() { this.questionCount++; this.accessCount++; this.updatedAt = Instant.now(); }
     public String getId() { return id; }
     public String getOwnerId() { return ownerId; }
     public String getName() { return name; }
@@ -82,8 +113,6 @@ public class KnowledgeBaseEntity {
     public String getVectorStatus() { return vectorStatus; }
     public String getVectorError() { return vectorError; }
     public int getChunkCount() { return chunkCount; }
-    public long getAccessCount() { return accessCount; }
-    public long getQuestionCount() { return questionCount; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
 }

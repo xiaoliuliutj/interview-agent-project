@@ -22,6 +22,7 @@ coverage/
 # Node.js and frontend builds
 **/node_modules/
 **/dist/
+.pnpm-store/
 
 # IDE and editor files
 .idea/

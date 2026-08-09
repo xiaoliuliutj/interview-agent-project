@@ -6,17 +6,20 @@ from app.agent.interview.models import (
     CandidateProfile,
     Difficulty,
     InterviewAction,
-    InterviewDecision,
+    InterviewEvaluation,
     InterviewPlan,
+    InterviewRoute,
     InterviewSession,
     InterviewStage,
     StagePlan,
 )
 from app.agent.interview.service import InterviewAgentService
 from app.agent.interview.workflow import InterviewWorkflow
-from app.agent.memory.models import LongTermMemory, MemoryContext
+from app.agent.memory.models import LongTermMemory
 from app.agent.memory.policy import MemoryPolicy
 from app.agent.memory.service import MemoryService
+from app.agent.rag.models import KnowledgeChunk, RagSearchResult
+from app.core.contracts import SessionStatus
 from app.core.exceptions import ConsistencyError
 from app.core.prompt_loader import PromptLoader
 
@@ -35,9 +38,7 @@ class InMemorySessionRepository:
         session = self.sessions.get(session_id)
         return session.model_copy(deep=True) if session else None
 
-    async def save(
-        self, session: InterviewSession, *, expected_version: int
-    ) -> InterviewSession:
+    async def save(self, session: InterviewSession, *, expected_version: int) -> InterviewSession:
         existing = self.sessions.get(session.session_id)
         if existing is None or existing.state_version != expected_version:
             raise ConsistencyError("Agent 会话状态已被并发修改")
@@ -58,255 +59,343 @@ class InMemoryLongTermMemoryRepository:
         self.memories[memory.user_id] = memory.model_copy(deep=True)
         return memory.model_copy(deep=True)
 
-    async def save(
-        self, memory: LongTermMemory, *, expected_version: int
-    ) -> LongTermMemory:
+    async def save(self, memory: LongTermMemory, *, expected_version: int) -> LongTermMemory:
         existing = self.memories.get(memory.user_id)
         if existing is None or existing.state_version != expected_version:
             raise ConsistencyError("长期记忆已被并发修改")
-        saved = memory.model_copy(
-            update={"state_version": expected_version + 1}, deep=True
-        )
+        saved = memory.model_copy(update={"state_version": expected_version + 1}, deep=True)
         self.memories[memory.user_id] = saved
         return saved.model_copy(deep=True)
 
 
 class StaticPlanner:
-    def __init__(self, plan: InterviewPlan) -> None:
-        self.plan = plan
-
     async def create_plan(self, profile: CandidateProfile) -> InterviewPlan:
-        return self.plan
+        return build_plan()
 
 
-class QueueDecisionAgent:
-    def __init__(self, decisions: list[InterviewDecision]) -> None:
-        self.decisions = deque(decisions)
+class QueueEvaluationAgent:
+    def __init__(self, evaluations: list[InterviewEvaluation], events: list[str]) -> None:
+        self.evaluations = deque(evaluations)
+        self.events = events
+        self.evidence_seen: list[list[dict[str, object]]] = []
 
-    async def decide(self, *args, **kwargs) -> InterviewDecision:
-        return self.decisions.popleft()
+    async def evaluate(self, session, candidate_answer, memory_context) -> InterviewEvaluation:
+        self.events.append("evaluate")
+        self.evidence_seen.append(session.current_question_evidence)
+        return self.evaluations.popleft()
+
+
+class QueueRoutingAgent:
+    def __init__(self, routes: list[InterviewRoute], events: list[str]) -> None:
+        self.routes = deque(routes)
+        self.events = events
+        self.evaluations_seen: list[InterviewEvaluation] = []
+
+    async def route(self, session, evaluation, allowed_actions, next_stage_name, memory_context) -> InterviewRoute:
+        self.events.append("route")
+        self.evaluations_seen.append(evaluation)
+        return self.routes.popleft()
+
+
+class StaticQuestionAgent:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+        self.short_term_turn_counts: list[int] = []
+
+    async def generate(self, session, route, evidence, memory_context) -> str:
+        self.events.append("question")
+        self.short_term_turn_counts.append(len(memory_context.recent_turns))
+        return f"{route.next_topic} 的具体问题"
+
+
+class RecordingRagTool:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+        self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+    async def search_for_question_generation(self, query: str, *, knowledge_base_ids: tuple[str, ...]):
+        self.events.append("rag")
+        self.calls.append((query, knowledge_base_ids))
+        return [RagSearchResult(chunk=KnowledgeChunk(
+            chunk_id="chunk-1", knowledge_base_id="system-kb", document_id="doc-1",
+            source_name="system.md", chunk_index=0, content="retrieved material",
+        ), score=0.9)]
 
 
 def build_plan() -> InterviewPlan:
     return InterviewPlan(
-        candidate_summary="测试候选人",
-        strategy_summary="测试计划",
+        candidate_summary="测试候选人", strategy_summary="测试计划",
         stages=[
-            StagePlan(
-                stage=InterviewStage.OPENING,
-                max_primary_questions=1,
-                max_followups_per_question=0,
-                difficulty=Difficulty.EASY,
-                topics=["自我介绍"],
-                time_budget_minutes=2,
-            ),
-            StagePlan(
-                stage=InterviewStage.PROJECT,
-                max_primary_questions=1,
-                max_followups_per_question=1,
-                difficulty=Difficulty.MEDIUM,
-                topics=["项目"],
-                time_budget_minutes=8,
-            ),
-            StagePlan(
-                stage=InterviewStage.FUNDAMENTAL,
-                max_primary_questions=2,
-                max_followups_per_question=1,
-                difficulty=Difficulty.MEDIUM,
-                topics=["Java"],
-                time_budget_minutes=10,
-            ),
-            StagePlan(
-                stage=InterviewStage.SCENARIO,
-                max_primary_questions=1,
-                max_followups_per_question=1,
-                difficulty=Difficulty.MEDIUM,
-                topics=["一致性"],
-                time_budget_minutes=8,
-            ),
-            StagePlan(
-                stage=InterviewStage.CODING,
-                max_primary_questions=1,
-                max_followups_per_question=0,
-                difficulty=Difficulty.MEDIUM,
-                topics=["算法"],
-                time_budget_minutes=10,
-            ),
-            StagePlan(
-                stage=InterviewStage.SUMMARY,
-                max_primary_questions=1,
-                max_followups_per_question=0,
-                difficulty=Difficulty.EASY,
-                topics=["总结"],
-                time_budget_minutes=2,
-            ),
+            StagePlan(stage=InterviewStage.OPENING, max_primary_questions=1, max_followups_per_question=0, difficulty=Difficulty.EASY, topics=["自我介绍"], time_budget_minutes=2),
+            StagePlan(stage=InterviewStage.PROJECT, max_primary_questions=1, max_followups_per_question=1, difficulty=Difficulty.MEDIUM, topics=["项目"], time_budget_minutes=8),
+            StagePlan(stage=InterviewStage.FUNDAMENTAL, max_primary_questions=2, max_followups_per_question=1, difficulty=Difficulty.MEDIUM, topics=["Java"], time_budget_minutes=10),
+            StagePlan(stage=InterviewStage.SCENARIO, max_primary_questions=1, max_followups_per_question=1, difficulty=Difficulty.MEDIUM, topics=["一致性"], time_budget_minutes=8),
+            StagePlan(stage=InterviewStage.CODING, max_primary_questions=1, max_followups_per_question=0, difficulty=Difficulty.MEDIUM, topics=["算法"], time_budget_minutes=10),
+            StagePlan(stage=InterviewStage.SUMMARY, max_primary_questions=1, max_followups_per_question=0, difficulty=Difficulty.EASY, topics=["总结"], time_budget_minutes=2),
         ],
     )
 
 
-def build_service(
-    repository: InMemorySessionRepository,
-    decisions: list[InterviewDecision],
-) -> InterviewAgentService:
+def evaluation(score: int = 80, summary: str = "回答完整") -> InterviewEvaluation:
+    return InterviewEvaluation(
+        score=score,
+        evaluation_summary=summary,
+        answer_summary="候选人回答摘要",
+    )
+
+
+def build_service(repository, evaluations, routes, events, rag_tool=None):
     prompt_loader = PromptLoader()
     memory_service = MemoryService(
         InMemoryLongTermMemoryRepository(),
-        MemoryPolicy(
-            short_term_turn_limit=5,
-            history_summary_max_characters=2000,
-            max_resume_snapshots=3,
-        ),
+        MemoryPolicy(short_term_turn_limit=5, history_summary_max_characters=2000, max_resume_snapshots=3),
     )
-    return InterviewAgentService(
-        StaticPlanner(build_plan()),
-        QueueDecisionAgent(decisions),
-        repository,
-        InterviewWorkflow.load(prompt_loader),
-        prompt_loader,
-        memory_service,
+    evaluation_agent = QueueEvaluationAgent(evaluations, events)
+    routing_agent = QueueRoutingAgent(routes, events)
+    question_agent = StaticQuestionAgent(events)
+    service = InterviewAgentService(
+        StaticPlanner(), evaluation_agent, routing_agent, question_agent, rag_tool,
+        repository, InterviewWorkflow.load(prompt_loader), prompt_loader, memory_service,
     )
+    return service, evaluation_agent, routing_agent, question_agent
 
 
 def build_profile() -> CandidateProfile:
     return CandidateProfile(
-        candidate_id="candidate-1",
-        resume_id="resume-1",
-        target_role="Java 后端",
+        candidate_id="candidate-1", resume_id="resume-1", resume_text="候选人有 Redis 项目经验",
+        jd_text="Java 后端岗位", target_role="Java 后端", interview_duration_minutes=30,
+        desired_difficulty=Difficulty.MEDIUM, question_count=7, custom_categories=[],
+        system_knowledge_base_ids=[], user_knowledge_base_ids=[],
     )
 
 
 @pytest.mark.asyncio
-async def test_initialize_and_advance_from_opening_to_project() -> None:
-    repository = InMemorySessionRepository()
-    service = build_service(
-        repository,
-        [
-            InterviewDecision(
-                action=InterviewAction.NEXT_STAGE,
-                next_message="请介绍一个你最熟悉的项目。",
-                evaluation_summary="自我介绍完整。",
-            )
-        ],
+async def test_evaluation_precedes_routing_and_question_generation() -> None:
+    repository, events = InMemorySessionRepository(), []
+    service, evaluator, router, question_agent = build_service(
+        repository, [evaluation()], [InterviewRoute(action=InterviewAction.NEXT_STAGE, next_topic="项目架构")], events,
     )
+    await service.initialize_session(user_id="user-1", session_id="session-1", profile=build_profile())
+    result = await service.submit_answer_for_run(
+        user_id="user-1", session_id="session-1", candidate_answer="我做过电商项目",
+        run_id="run-1", expected_session_status=SessionStatus.ACTIVE,
+        expected_state_version=0,
+    )
+    updated = result.session
 
-    created = await service.initialize_session(
-        user_id="user-1",
-        session_id="session-1",
-        profile=build_profile(),
-    )
-    updated = await service.submit_answer(
-        user_id="user-1",
-        session_id="session-1",
-        candidate_answer="我有一个电商项目。",
-    )
-
-    assert created.current_stage == InterviewStage.OPENING
+    assert events == ["evaluate", "route", "question"]
+    assert question_agent.short_term_turn_counts == [1]
+    assert router.evaluations_seen[0].score == 80
+    assert evaluator.evidence_seen == [[]]
     assert updated.current_stage == InterviewStage.PROJECT
-    assert updated.current_question == "请介绍一个你最熟悉的项目。"
-    assert updated.state_version == 1
-    assert len(updated.turns) == 1
+    assert updated.current_question == "项目架构 的具体问题"
+    assert updated.turns[0].score == 80
+    assert result.snapshot.turn_stage == InterviewStage.OPENING
 
 
 @pytest.mark.asyncio
-async def test_complete_session_is_idempotent_and_keeps_agent_history() -> None:
-    repository = InMemorySessionRepository()
-    service = build_service(repository, [])
-    await service.initialize_session(
-        user_id="user-1", session_id="session-1", profile=build_profile()
-    )
-
-    completed = await service.complete_session(
-        user_id="user-1", session_id="session-1"
-    )
-    retried = await service.complete_session(
-        user_id="user-1", session_id="session-1"
-    )
-
-    assert completed.status == "COMPLETED"
-    assert completed.state_version == 1
-    assert retried.state_version == 1
-    assert await repository.get("session-1") is not None
-
-
-@pytest.mark.asyncio
-async def test_follow_up_is_persisted_in_current_stage() -> None:
-    repository = InMemorySessionRepository()
-    service = build_service(
+async def test_follow_up_is_routed_after_evaluation() -> None:
+    repository, events = InMemorySessionRepository(), []
+    service, _, _, _ = build_service(
         repository,
+        [evaluation(), evaluation(60, "技术细节不足")],
         [
-            InterviewDecision(
-                action=InterviewAction.NEXT_STAGE,
-                next_message="请介绍一个你最熟悉的项目。",
-                evaluation_summary="开场完成。",
-            ),
-            InterviewDecision(
-                action=InterviewAction.FOLLOW_UP,
-                next_message="这个项目中最难解决的问题是什么？",
-                evaluation_summary="项目描述缺少技术细节。",
-            ),
+            InterviewRoute(action=InterviewAction.NEXT_STAGE, next_topic="项目架构"),
+            InterviewRoute(action=InterviewAction.FOLLOW_UP, next_topic="缓存一致性细节"),
         ],
+        events,
     )
-    profile = build_profile()
-    await service.initialize_session(
-        user_id="user-1", session_id="session-1", profile=profile
+    await service.initialize_session(user_id="user-1", session_id="session-1", profile=build_profile())
+    await service.submit_answer_for_run(
+        user_id="user-1", session_id="session-1", candidate_answer="项目介绍",
+        run_id="run-1", expected_session_status=SessionStatus.ACTIVE,
+        expected_state_version=0,
     )
-    await service.submit_answer(
-        user_id="user-1", session_id="session-1", candidate_answer="项目介绍"
-    )
-    updated = await service.submit_answer(
-        user_id="user-1", session_id="session-1", candidate_answer="用了 Redis"
-    )
+    updated = (await service.submit_answer_for_run(
+        user_id="user-1", session_id="session-1", candidate_answer="用了 Redis",
+        run_id="run-2", expected_session_status=SessionStatus.ACTIVE,
+        expected_state_version=1,
+    )).session
 
     assert updated.current_stage == InterviewStage.PROJECT
     assert updated.followup_count == 1
-    assert updated.current_question == "这个项目中最难解决的问题是什么？"
-    assert updated.state_version == 2
+    assert updated.current_question == "缓存一致性细节 的具体问题"
+
+
+@pytest.mark.asyncio
+async def test_end_route_does_not_require_a_fake_next_topic() -> None:
+    repository, events = InMemorySessionRepository(), []
+    service, _, _, _ = build_service(
+        repository, [evaluation(), evaluation()],
+        [
+            InterviewRoute(action=InterviewAction.NEXT_STAGE, next_topic="项目架构"),
+            InterviewRoute(action=InterviewAction.END_INTERVIEW),
+        ],
+        events,
+    )
+    await service.initialize_session(user_id="user-1", session_id="session-1", profile=build_profile())
+    await service.submit_answer_for_run(
+        user_id="user-1", session_id="session-1", candidate_answer="开场回答",
+        run_id="run-1", expected_session_status=SessionStatus.ACTIVE,
+        expected_state_version=0,
+    )
+
+    updated = (await service.submit_answer_for_run(
+        user_id="user-1", session_id="session-1", candidate_answer="结束面试",
+        run_id="run-2", expected_session_status=SessionStatus.ACTIVE,
+        expected_state_version=1,
+    )).session
+
+    assert updated.status == "COMPLETED"
+    assert "2" in updated.current_question
+    assert events == ["evaluate", "route", "question", "evaluate", "route"]
 
 
 @pytest.mark.asyncio
 async def test_duplicate_session_is_rejected() -> None:
-    repository = InMemorySessionRepository()
-    service = build_service(repository, [])
-    profile = build_profile()
+    repository, events = InMemorySessionRepository(), []
+    service, _, _, _ = build_service(repository, [], [], events)
+    await service.initialize_session(user_id="user-1", session_id="session-1", profile=build_profile())
+    with pytest.raises(ConsistencyError):
+        await service.initialize_session(user_id="user-1", session_id="session-1", profile=build_profile())
+
+
+@pytest.mark.asyncio
+async def test_same_initialization_run_id_rejects_changed_profile() -> None:
+    repository, events = InMemorySessionRepository(), []
+    service, _, _, _ = build_service(repository, [], [], events)
     await service.initialize_session(
-        user_id="user-1", session_id="session-1", profile=profile
+        user_id="user-1", session_id="session-1", profile=build_profile(), run_id="init-1"
     )
+    changed = build_profile().model_copy(update={"target_role": "Python 后端"})
 
     with pytest.raises(ConsistencyError):
         await service.initialize_session(
-            user_id="user-1", session_id="session-1", profile=profile
+            user_id="user-1", session_id="session-1", profile=changed, run_id="init-1"
         )
 
 
 @pytest.mark.asyncio
-async def test_same_run_id_returns_the_persisted_snapshot_without_reinvoking_agent() -> None:
-    repository = InMemorySessionRepository()
-    service = build_service(
-        repository,
-        [
-            InterviewDecision(
-                action=InterviewAction.NEXT_STAGE,
-                next_message="请介绍一个你最熟悉的项目。",
-                evaluation_summary="开场完成。",
-            )
-        ],
+async def test_same_run_id_returns_persisted_snapshot_without_reinvoking_agents() -> None:
+    repository, events = InMemorySessionRepository(), []
+    service, _, _, _ = build_service(
+        repository, [evaluation()], [InterviewRoute(action=InterviewAction.NEXT_STAGE, next_topic="项目架构")], events,
     )
-    await service.initialize_session(
-        user_id="user-1", session_id="session-1", profile=build_profile(), run_id="init-1"
-    )
-
+    await service.initialize_session(user_id="user-1", session_id="session-1", profile=build_profile(), run_id="init-1")
     first = await service.submit_answer_for_run(
-        user_id="user-1",
-        session_id="session-1",
-        candidate_answer="项目介绍",
-        run_id="run-1",
+        user_id="user-1", session_id="session-1", candidate_answer="项目介绍",
+        run_id="run-1", expected_session_status=SessionStatus.ACTIVE,
+        expected_state_version=0,
     )
     replay = await service.submit_answer_for_run(
-        user_id="user-1",
-        session_id="session-1",
-        candidate_answer="重复提交",
-        run_id="run-1",
+        user_id="user-1", session_id="session-1", candidate_answer="项目介绍",
+        run_id="run-1", expected_session_status=SessionStatus.ACTIVE,
+        expected_state_version=0,
     )
 
     assert replay.snapshot == first.snapshot
-    assert replay.session.state_version == first.session.state_version
+    assert events == ["evaluate", "route", "question"]
+
+
+@pytest.mark.asyncio
+async def test_same_run_id_rejects_a_different_answer() -> None:
+    repository, events = InMemorySessionRepository(), []
+    service, _, _, _ = build_service(
+        repository, [evaluation()],
+        [InterviewRoute(action=InterviewAction.NEXT_STAGE, next_topic="项目架构")],
+        events,
+    )
+    await service.initialize_session(
+        user_id="user-1", session_id="session-1", profile=build_profile()
+    )
+    await service.submit_answer_for_run(
+        user_id="user-1", session_id="session-1", candidate_answer="原始回答",
+        run_id="run-1", expected_session_status=SessionStatus.ACTIVE,
+        expected_state_version=0,
+    )
+
+    with pytest.raises(ConsistencyError):
+        await service.submit_answer_for_run(
+            user_id="user-1", session_id="session-1", candidate_answer="篡改后的回答",
+            run_id="run-1", expected_session_status=SessionStatus.ACTIVE,
+            expected_state_version=0,
+        )
+
+    assert events == ["evaluate", "route", "question"]
+
+
+@pytest.mark.asyncio
+async def test_new_run_rejects_stale_upper_layer_agent_state() -> None:
+    repository, events = InMemorySessionRepository(), []
+    service, _, _, _ = build_service(
+        repository, [evaluation()],
+        [InterviewRoute(action=InterviewAction.NEXT_STAGE, next_topic="项目架构")],
+        events,
+    )
+    await service.initialize_session(
+        user_id="user-1", session_id="session-1", profile=build_profile()
+    )
+
+    with pytest.raises(ConsistencyError):
+        await service.submit_answer_for_run(
+            user_id="user-1", session_id="session-1", candidate_answer="过期回答",
+            run_id="stale-run", expected_session_status=SessionStatus.ACTIVE,
+            expected_state_version=1,
+        )
+
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_paused_session_can_resume_on_answer_without_reinitializing() -> None:
+    repository, events = InMemorySessionRepository(), []
+    service, _, _, _ = build_service(
+        repository, [evaluation()],
+        [InterviewRoute(action=InterviewAction.NEXT_STAGE, next_topic="项目架构")],
+        events,
+    )
+    await service.initialize_session(user_id="user-1", session_id="session-1", profile=build_profile())
+    paused = await service.pause_session(
+        user_id="user-1", session_id="session-1",
+        expected_session_status=SessionStatus.ACTIVE, expected_state_version=0,
+    )
+    assert paused.status == SessionStatus.PAUSED
+    resumed = await service.submit_answer_for_run(
+        user_id="user-1", session_id="session-1", candidate_answer="恢复后的回答",
+        run_id="run-resume", expected_session_status=SessionStatus.PAUSED,
+        expected_state_version=1,
+    )
+    assert resumed.session.status == SessionStatus.ACTIVE
+    assert resumed.snapshot.state_version == 2
+
+
+@pytest.mark.asyncio
+async def test_rag_runs_only_after_routing_and_reuses_evidence_cache_for_same_topic() -> None:
+    repository, events = InMemorySessionRepository(), []
+    rag_tool = RecordingRagTool(events)
+    service, evaluator, _, _ = build_service(
+        repository,
+        [evaluation(), evaluation(60, "需要继续深挖")],
+        [
+            InterviewRoute(action=InterviewAction.NEXT_STAGE, next_topic="Redis 缓存一致性"),
+            InterviewRoute(action=InterviewAction.FOLLOW_UP, next_topic=" redis 缓存一致性 "),
+        ],
+        events,
+        rag_tool,
+    )
+    profile = build_profile().model_copy(update={"system_knowledge_base_ids": ["system-kb"], "user_knowledge_base_ids": ["user-kb"]})
+    await service.initialize_session(user_id="user-1", session_id="session-1", profile=profile)
+    await service.submit_answer_for_run(
+        user_id="user-1", session_id="session-1", candidate_answer="开场回答",
+        run_id="run-1", expected_session_status=SessionStatus.ACTIVE,
+        expected_state_version=0,
+    )
+    await service.submit_answer_for_run(
+        user_id="user-1", session_id="session-1", candidate_answer="项目回答",
+        run_id="run-2", expected_session_status=SessionStatus.ACTIVE,
+        expected_state_version=1,
+    )
+
+    assert events == ["evaluate", "route", "rag", "question", "evaluate", "route", "question"]
+    assert rag_tool.calls == [("Redis 缓存一致性", ("system-kb", "user-kb"))]
+    assert evaluator.evidence_seen == [[], [{"content": "retrieved material", "score": 0.9, "knowledgeBaseId": "system-kb"}]]

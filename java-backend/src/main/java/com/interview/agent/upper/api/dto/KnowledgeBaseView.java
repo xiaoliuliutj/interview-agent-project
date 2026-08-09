@@ -10,9 +10,7 @@ public record KnowledgeBaseView(
         long fileSize,
         String contentType,
         Instant uploadedAt,
-        Instant lastAccessedAt,
-        long accessCount,
-        long questionCount,
+        Instant updatedAt,
         String vectorStatus,
         String vectorError,
         int chunkCount) {

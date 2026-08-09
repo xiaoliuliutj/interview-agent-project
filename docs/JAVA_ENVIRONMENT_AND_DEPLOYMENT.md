@@ -13,7 +13,7 @@
 | Python | Conda 环境 `D:\Anaconda\envs\inter-guide` | Python Agent |
 | PostgreSQL | 16 + pgvector | Java 业务数据、Agent 会话、长期记忆和向量 |
 | Redis | 7.x | RAG 答案缓存和短期缓存，不承担业务消息可靠投递 |
-| RabbitMQ | 3.13+ | 面试初始化、简历分析和 RAG 向量化异步任务、重试和死信队列 |
+| RabbitMQ | 3.13+ | 简历分析和 RAG 向量化异步任务、重试和死信队列 |
 | 中文字体 | 可商用 TTF/OTF | Java PDF 报告中文渲染 |
 
 `D:\Maven\apache-maven-3.9.16` 当前是 Maven 源码树，不是可执行发行版；请安装二进制包后再使用其 `bin\mvn.cmd`。
@@ -105,9 +105,9 @@ pnpm dev
 
 ## 5. 业务链路与持久化边界
 
-- Java 保存候选人、简历、JD、面试会话、每轮回答、评分、知识库和异步任务状态。
+- Java 保存候选人、简历、JD、面试会话、每轮问题与回答、知识库和异步任务状态；回答评分、记忆摘要与 RAG 证据只保留在 Python 下层。
 - Python 保存 Agent 会话状态、短期记忆、用户长期记忆和向量索引；恢复时使用 `userId + sessionId`，初始化后不由 Java 传递完整对话上下文。
-- RabbitMQ 只承担面试初始化、简历分析和 RAG 向量化的异步任务传递；Redis 只承担缓存。业务最终状态必须落 PostgreSQL。
+- RabbitMQ 只承担简历分析和 RAG 向量化的异步任务传递；文本面试初始化与逐轮回答是同步调用。Redis 只承担缓存。业务最终状态必须落 PostgreSQL。
 - 每次正式回答带 `runId`，Java 使用乐观锁和幂等记录避免重复提交；Python 使用同一 `runId` 返回稳定结果。
 - 简历和知识库原始文件必须通过 Java 文件存储配置保存，数据库保存元数据和解析内容；删除业务记录时同步清理文件。
 
@@ -123,6 +123,6 @@ pnpm dev
 
 ## 7. 当前范围
 
-首期可运行链路为文本面试、简历分析、知识库管理、Agent RAG 问答和日程解析/状态流转。语音面试（ASR/TTS/WebSocket）仍是后续扩展，不应在首期前端入口中宣称已可用。
+首期可运行链路为文本面试、简历分析、知识库管理和面试内部 RAG。独立知识库聊天、面试日程解析以及语音面试（ASR/TTS/WebSocket）不属于当前范围。
 
 前端不要使用 `npm ci`：仓库的 Docker 构建与锁定依赖均使用 `pnpm-lock.yaml`，而历史遗留的 `package-lock.json` 不作为部署依据。Dockerfile 固定使用 pnpm 10.26.2，并允许构建 Vite 所需的原生依赖。需要清理历史 `package-lock.json` 时，应单独确认后再删除，避免影响现有工作区。

@@ -13,6 +13,7 @@ class MemoryPolicy:
     short_term_turn_limit: int
     history_summary_max_characters: int
     max_resume_snapshots: int
+    max_resume_evaluation_runs: int = 100
 
     @classmethod
     def load(cls, path: Path | None = None) -> "MemoryPolicy":
@@ -23,6 +24,7 @@ class MemoryPolicy:
                 short_term_turn_limit=int(raw["shortTermTurnLimit"]),
                 history_summary_max_characters=int(raw["historySummaryMaxCharacters"]),
                 max_resume_snapshots=int(raw["maxResumeSnapshots"]),
+                max_resume_evaluation_runs=int(raw["maxResumeEvaluationRuns"]),
             )
         except (FileNotFoundError, KeyError, ValueError, json.JSONDecodeError) as error:
             raise WorkflowConfigurationError("记忆策略配置无效") from error
@@ -33,4 +35,6 @@ class MemoryPolicy:
             raise WorkflowConfigurationError("长期摘要容量不能小于 200 字符")
         if policy.max_resume_snapshots < 1:
             raise WorkflowConfigurationError("至少保留一份简历快照")
+        if policy.max_resume_evaluation_runs < 1:
+            raise WorkflowConfigurationError("resume evaluation run retention must be positive")
         return policy

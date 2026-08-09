@@ -1,65 +1,123 @@
 package com.interview.agent.upper.api;
 
-import com.interview.agent.upper.api.dto.CreateInterviewRequest;
+import com.interview.agent.upper.api.dto.ApiResult;
+import com.interview.agent.upper.api.dto.InterviewDetailView;
+import com.interview.agent.upper.api.dto.InterviewTurnView;
 import com.interview.agent.upper.api.dto.InterviewView;
+import com.interview.agent.upper.api.dto.StartInterviewRequest;
 import com.interview.agent.upper.api.dto.SubmitInterviewAnswerRequest;
+import com.interview.agent.upper.domain.InterviewTurnEntity;
+import com.interview.agent.upper.service.BusinessException;
 import com.interview.agent.upper.service.InterviewService;
-import com.interview.agent.upper.service.InterviewTaskService;
-import com.interview.agent.upper.domain.InterviewTaskEntity;
+import com.interview.agent.upper.service.InterviewReportPdfService;
+import com.interview.agent.upper.service.UserIdentityResolver;
 import jakarta.validation.Valid;
-import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.ResponseStatus;
-import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.RequestHeader;
-import com.interview.agent.upper.service.BusinessException;
-import com.interview.agent.upper.service.UserIdentityResolver;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 
+import java.util.List;
+import java.util.stream.IntStream;
+
+/** The only public API for text interviews. */
 @RestController
 @RequestMapping("/api/interviews")
 public class InterviewController {
     private final InterviewService interviewService;
-    private final InterviewTaskService taskService;
     private final UserIdentityResolver identity;
+    private final InterviewReportPdfService reportPdfService;
 
-    public InterviewController(InterviewService interviewService, InterviewTaskService taskService,
-            UserIdentityResolver identity) {
+    public InterviewController(InterviewService interviewService, UserIdentityResolver identity,
+                               InterviewReportPdfService reportPdfService) {
         this.interviewService = interviewService;
-        this.taskService = taskService;
         this.identity = identity;
+        this.reportPdfService = reportPdfService;
     }
 
     @PostMapping
-    public InterviewView start(@Valid @RequestBody CreateInterviewRequest request,
-            @RequestHeader(value = "X-User-Id", required = false) String userId) {
-        requireBodyOwner(request.userId(), userId);
-        return interviewService.start(request);
+    public ApiResult<InterviewView> start(@Valid @RequestBody StartInterviewRequest request,
+                                          @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return ApiResult.success(interviewService.start(identity.require(userId), request));
     }
 
-    @PostMapping("/tasks")
-    @ResponseStatus(HttpStatus.ACCEPTED)
-    public InterviewTaskEntity startAsync(@Valid @RequestBody CreateInterviewRequest request,
+    @GetMapping
+    public ApiResult<List<InterviewView>> list(
             @RequestHeader(value = "X-User-Id", required = false) String userId) {
-        requireBodyOwner(request.userId(), userId);
-        return taskService.submitCreate(request);
+        return ApiResult.success(interviewService.list(identity.require(userId)));
+    }
+
+    @GetMapping("/{sessionId}")
+    public ApiResult<InterviewDetailView> get(@PathVariable String sessionId,
+                                               @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return ApiResult.success(detail(sessionId, identity.require(userId)));
+    }
+
+    @GetMapping("/unfinished/{resumeId}")
+    public ApiResult<InterviewView> unfinished(@PathVariable String resumeId,
+                                                 @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return ApiResult.success(interviewService.findUnfinished(identity.require(userId), resumeId));
     }
 
     @PostMapping("/{sessionId}/answers")
-    public InterviewView submitAnswer(
-            @PathVariable String sessionId,
-            @Valid @RequestBody SubmitInterviewAnswerRequest request,
-            @RequestHeader(value = "X-User-Id", required = false) String userId) {
-        requireBodyOwner(request.userId(), userId);
-        return interviewService.submitAnswer(
-                sessionId, request.userId(), request.answer(), request.runId());
+    public ApiResult<InterviewView> submitAnswer(@PathVariable String sessionId,
+                                                   @Valid @RequestBody SubmitInterviewAnswerRequest request,
+                                                   @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        String owner = identity.require(userId);
+        return ApiResult.success(interviewService.submitAnswer(sessionId, owner, request.answer(), request.runId()));
     }
 
-    private void requireBodyOwner(String bodyUserId, String headerUserId) {
-        if (!identity.require(headerUserId).equals(bodyUserId)) {
-            throw new BusinessException("USER_ID_MISMATCH", "request userId does not match X-User-Id");
+    @PostMapping("/{sessionId}/complete")
+    public ApiResult<Void> complete(@PathVariable String sessionId,
+                                    @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        interviewService.complete(sessionId, identity.require(userId));
+        return ApiResult.success(null);
+    }
+
+    @PostMapping("/{sessionId}/pause")
+    public ApiResult<Void> pause(@PathVariable String sessionId,
+                                 @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        interviewService.pause(sessionId, identity.require(userId));
+        return ApiResult.success(null);
+    }
+
+    @GetMapping("/{sessionId}/export")
+    public ResponseEntity<byte[]> export(@PathVariable String sessionId,
+                                         @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        InterviewDetailView detail = detail(sessionId, identity.require(userId));
+        byte[] content = reportPdfService.render(sessionId, detail.session().status(),
+                detail.session().totalQuestions(), detail.turns());
+        return ResponseEntity.ok().contentType(MediaType.APPLICATION_PDF)
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"interview-" + sessionId + ".pdf\"")
+                .body(content);
+    }
+
+    @DeleteMapping("/{sessionId}")
+    public ApiResult<Void> delete(@PathVariable String sessionId,
+                                  @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        interviewService.delete(sessionId, identity.require(userId));
+        return ApiResult.success(null);
+    }
+
+    private InterviewDetailView detail(String sessionId, String userId) {
+        InterviewView session = interviewService.view(sessionId);
+        if (!userId.equals(session.userId())) {
+            throw new BusinessException("SESSION_ACCESS_DENIED", "session does not belong to current user");
         }
+        List<InterviewTurnEntity> turns = interviewService.turns(sessionId);
+        List<InterviewTurnView> visibleTurns = IntStream.range(0, turns.size())
+                .mapToObj(index -> {
+                    InterviewTurnEntity turn = turns.get(index);
+                    return new InterviewTurnView(index, turn.getStage(), turn.getQuestion(),
+                            turn.getCandidateAnswer(), turn.getCreatedAt());
+                }).toList();
+        return new InterviewDetailView(session, visibleTurns);
     }
 }

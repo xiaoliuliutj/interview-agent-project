@@ -7,8 +7,6 @@ from pydantic import BaseModel, Field
 
 class RagUseCase(StrEnum):
     QUESTION_GENERATION = "QUESTION_GENERATION"
-    RESUME_EVALUATION = "RESUME_EVALUATION"
-    KNOWLEDGE_BASE_QUERY = "KNOWLEDGE_BASE_QUERY"
 
 
 class KnowledgeDocument(BaseModel):

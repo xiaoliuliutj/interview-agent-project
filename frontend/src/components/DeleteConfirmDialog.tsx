@@ -1,7 +1,7 @@
 import ConfirmDialog from './ConfirmDialog';
 
 export interface DeleteItem {
-  id: number;
+  id: string | number;
   name?: string;
   title?: string;
   filename?: string;
@@ -56,4 +56,3 @@ export default function DeleteConfirmDialog({
     />
   );
 }
-

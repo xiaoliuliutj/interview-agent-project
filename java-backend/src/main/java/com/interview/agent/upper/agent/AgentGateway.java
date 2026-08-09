@@ -3,12 +3,12 @@ package com.interview.agent.upper.agent;
 import com.interview.agent.upper.agent.dto.AgentInitializeRequest;
 import com.interview.agent.upper.agent.dto.AgentRespondRequest;
 import com.interview.agent.upper.agent.dto.AgentResponse;
-import com.interview.agent.upper.agent.dto.AgentRagRequest;
 import com.interview.agent.upper.agent.dto.AgentRagIndexRequest;
+import com.interview.agent.upper.agent.dto.AgentRagDeleteRequest;
 import com.interview.agent.upper.agent.dto.AgentCompleteRequest;
 import com.interview.agent.upper.agent.dto.AgentResumeEvaluateRequest;
+import com.interview.agent.upper.agent.dto.AgentResumeMemoryActivationRequest;
 import com.interview.agent.upper.agent.dto.AgentSkillRequest;
-import com.interview.agent.upper.agent.dto.AgentScheduleParseRequest;
 
 public interface AgentGateway {
     AgentResponse initialize(AgentInitializeRequest request);
@@ -19,11 +19,12 @@ public interface AgentGateway {
 
     AgentResponse evaluateResume(AgentResumeEvaluateRequest request);
 
-    AgentResponse searchRag(AgentRagRequest request);
+    AgentResponse activateResumeMemory(AgentResumeMemoryActivationRequest request);
 
     AgentResponse indexRag(AgentRagIndexRequest request);
 
+    AgentResponse deleteRag(AgentRagDeleteRequest request);
+
     AgentResponse skills(AgentSkillRequest request);
 
-    AgentResponse parseSchedule(AgentScheduleParseRequest request);
 }

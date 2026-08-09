@@ -14,10 +14,7 @@ public record InterviewView(
         String status,
         long stateVersion,
         String currentQuestion,
-        Integer overallScore,
-        String finalSummary,
-        String evaluateStatus,
-        String evaluateError,
+        String currentStage,
         Instant createdAt,
         Instant updatedAt) {
 }

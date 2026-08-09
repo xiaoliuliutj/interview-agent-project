@@ -1,8 +1,10 @@
 package com.interview.agent.upper.api;
 
 import com.interview.agent.upper.api.dto.ApiResult;
+import com.interview.agent.upper.api.dto.InterviewView;
 import com.interview.agent.upper.api.dto.ResumeAnalysisView;
 import com.interview.agent.upper.domain.CandidateEntity;
+import com.interview.agent.upper.domain.InterviewSessionEntity;
 import com.interview.agent.upper.domain.ResumeEntity;
 import com.interview.agent.upper.repository.CandidateRepository;
 import com.interview.agent.upper.repository.InterviewSessionRepository;
@@ -29,6 +31,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestPart;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -76,40 +79,70 @@ public class ResumeController {
         this.pdfFontPath = pdfFontPath == null || pdfFontPath.isBlank() ? null : Path.of(pdfFontPath);
     }
 
-    @GetMapping("/health")
-    public ApiResult<Map<String, String>> health() {
-        return ApiResult.success(Map.of("status", "UP", "service", "resume"));
-    }
-
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ApiResult<Map<String, Object>> upload(
             @RequestPart("file") MultipartFile file,
+            @RequestPart("targetRole") String targetRole,
             @RequestHeader(value = "X-User-Id", required = false) String userId) throws IOException {
         String owner = identity.require(userId);
         if (file.isEmpty()) throw new BusinessException("RESUME_FILE_REQUIRED", "resume file must not be empty");
-        ResumeFileStorageService.StoredFile stored = fileStorage.store(file);
-        ResumeEntity duplicate = resumeRepository.findByFileHash(stored.hash()).orElse(null);
-        if (duplicate != null && owns(duplicate, owner)) {
-            return ApiResult.success(Map.of("duplicate", true, "resumeId", duplicate.getId(),
-                    "storage", Map.of("fileKey", duplicate.getStorageKey())));
+        if (file.getOriginalFilename() == null || file.getOriginalFilename().isBlank()) {
+            throw new BusinessException("RESUME_FILENAME_REQUIRED", "resume filename is required");
         }
+        if (targetRole == null || targetRole.isBlank()) {
+            throw new BusinessException("TARGET_ROLE_REQUIRED", "targetRole is required for resume analysis");
+        }
+        ResumeFileStorageService.FileDescriptor descriptor = fileStorage.inspect(file);
+        CandidateEntity candidate = candidateRepository.findByUserId(owner)
+                .orElseGet(() -> candidateRepository.save(
+                        new CandidateEntity(idGenerator.next(), owner, owner)));
+        ResumeEntity duplicate = resumeRepository
+                .findFirstByCandidateIdAndFileHash(candidate.getId(), descriptor.hash())
+                .orElse(null);
+        if (duplicate != null) {
+            List<String> candidateResumeIds = resumeRepository.findByCandidateId(candidate.getId()).stream()
+                    .map(ResumeEntity::getId).toList();
+            candidate.setCurrentResumeId(duplicate.getId());
+            candidateRepository.save(candidate);
+            analysisService.cancelActiveForResumeIds(candidateResumeIds);
+            ResumeAnalysisView analysis = analysisService.submit(duplicate.getId(), owner, targetRole);
+            return ApiResult.success(Map.of(
+                    "duplicate", true,
+                    "resumeId", duplicate.getId(),
+                    "storage", Map.of("resumeId", duplicate.getId()),
+                    "analysis", Map.of("originalText", duplicate.getContent(), "status", analysis.status(),
+                            "analysisId", analysis.id())));
+        }
+        List<String> previousResumeIds = resumeRepository.findByCandidateId(candidate.getId()).stream()
+                .map(ResumeEntity::getId).toList();
+        int nextVersion = resumeRepository.findFirstByCandidateIdOrderByVersionDesc(candidate.getId())
+                .map(item -> item.getVersion() + 1).orElse(1);
         String resumeId = idGenerator.next();
-        String candidateId = "candidate-" + resumeId;
-        candidateRepository.save(new CandidateEntity(candidateId, owner, "Candidate"));
         String text;
         try {
             text = tika.parseToString(file.getInputStream());
         } catch (Exception error) {
             throw new BusinessException("RESUME_PARSE_FAILED", "unable to parse resume file");
         }
-        ResumeEntity resume = new ResumeEntity(resumeId, candidateId, 1, text);
-        resume.attachFile(stored.hash(), stored.filename(), stored.size(), stored.contentType(), stored.key());
-        resumeRepository.save(resume);
-        ResumeAnalysisView analysis = analysisService.submit(resumeId, owner);
+        if (text == null || text.isBlank()) {
+            throw new BusinessException("RESUME_CONTENT_EMPTY", "resume text must not be empty");
+        }
+        ResumeFileStorageService.StoredFile stored = fileStorage.store(descriptor, resumeId);
+        try {
+            ResumeEntity resume = new ResumeEntity(resumeId, candidate.getId(), nextVersion, text);
+            resume.attachFile(stored.hash(), stored.filename(), stored.size(), stored.contentType(), stored.key());
+            resumeRepository.save(resume);
+        } catch (RuntimeException error) {
+            fileStorage.delete(stored.key());
+            throw error;
+        }
+        analysisService.cancelActiveForResumeIds(previousResumeIds);
+        candidate.setCurrentResumeId(resumeId);
+        candidateRepository.save(candidate);
+        ResumeAnalysisView analysis = analysisService.submit(resumeId, owner, targetRole);
         Map<String, Object> result = new HashMap<>();
-        result.put("storage", Map.of("fileKey", stored.key(), "resumeId", resumeId));
+        result.put("storage", Map.of("resumeId", resumeId));
         result.put("analysis", Map.of("originalText", text, "status", analysis.status(), "analysisId", analysis.id()));
-        result.put("duplicate", false);
         return ApiResult.success(result);
     }
 
@@ -127,7 +160,6 @@ public class ResumeController {
             item.put("interviewCount", interviewSessionRepository.findByUserIdOrderByCreatedAtDesc(owner).stream()
                     .filter(session -> resume.getId().equals(session.getResumeId())).count());
             item.put("uploadedAt", resume.getCreatedAt());
-            item.put("accessCount", 0);
             item.put("latestScore", latest == null ? null : latest.overallScore());
             item.put("lastAnalyzedAt", latest == null ? null : latest.analyzedAt());
             item.put("analyzeStatus", latest == null ? null : latest.status());
@@ -145,12 +177,13 @@ public class ResumeController {
         result.put("filename", resume.getOriginalFilename());
         result.put("fileSize", resume.getFileSize());
         result.put("contentType", resume.getContentType());
-        result.put("storageUrl", resume.getStorageKey());
         result.put("uploadedAt", resume.getCreatedAt());
-        result.put("accessCount", 0);
         result.put("resumeText", resume.getContent());
-        result.put("interviews", interviewSessionRepository.findByUserIdOrderByCreatedAtDesc(identity.require(userId)).stream()
-                .filter(session -> resume.getId().equals(session.getResumeId())).toList());
+        result.put("interviews", interviewSessionRepository
+                .findByUserIdOrderByCreatedAtDesc(identity.require(userId)).stream()
+                .filter(session -> resume.getId().equals(session.getResumeId()))
+                .map(this::toInterviewView)
+                .toList());
         result.put("analyses", analysisService.list(id));
         return ApiResult.success(result);
     }
@@ -217,15 +250,28 @@ public class ResumeController {
 
     @PostMapping("/{id}/reanalyze")
     public ApiResult<ResumeAnalysisView> reanalyze(@PathVariable String id,
+            @RequestParam("targetRole") String targetRole,
             @RequestHeader(value = "X-User-Id", required = false) String userId) {
-        String owner = identity.require(userId); owned(id, owner);
-        return ApiResult.success(analysisService.submit(id, owner));
+        String owner = identity.require(userId);
+        ResumeEntity resume = owned(id, owner);
+        CandidateEntity candidate = candidateRepository.findById(resume.getCandidateId())
+                .orElseThrow(() -> new BusinessException("CANDIDATE_NOT_FOUND", "candidate not found"));
+        if (!id.equals(candidate.getCurrentResumeId())) {
+            throw new BusinessException("RESUME_NOT_CURRENT",
+                    "only the current resume can be reanalyzed");
+        }
+        return ApiResult.success(analysisService.submit(id, owner, targetRole));
     }
 
     @DeleteMapping("/{id}")
     public ApiResult<Void> delete(@PathVariable String id,
             @RequestHeader(value = "X-User-Id", required = false) String userId) throws IOException {
         ResumeEntity resume = owned(id, userId);
+        CandidateEntity candidate = candidateRepository.findById(resume.getCandidateId())
+                .orElseThrow(() -> new BusinessException("CANDIDATE_NOT_FOUND", "candidate not found"));
+        // A queued message can still arrive after deletion. Mark the task cancelled before
+        // deleting its record so the worker will never apply an old result.
+        analysisService.cancelActiveForResumeIds(List.of(id));
         analysisService.deleteByResumeId(id);
         interviewSessionRepository.findByUserIdOrderByCreatedAtDesc(identity.require(userId)).stream()
                 .filter(session -> id.equals(session.getResumeId()))
@@ -233,18 +279,18 @@ public class ResumeController {
                     interviewTurnRepository.deleteBySessionId(session.getId());
                     interviewSessionRepository.delete(session);
                 });
+        if (id.equals(candidate.getCurrentResumeId())) {
+            String replacementResumeId = resumeRepository.findByCandidateId(candidate.getId()).stream()
+                    .filter(item -> !id.equals(item.getId()))
+                    .max(java.util.Comparator.comparingInt(ResumeEntity::getVersion))
+                    .map(ResumeEntity::getId)
+                    .orElse(null);
+            candidate.setCurrentResumeId(replacementResumeId);
+            candidateRepository.save(candidate);
+        }
         fileStorage.delete(resume.getStorageKey());
         resumeRepository.delete(resume);
         return ApiResult.success(null);
-    }
-
-    @GetMapping("/statistics")
-    public ApiResult<Map<String, Object>> statistics(
-            @RequestHeader(value = "X-User-Id", required = false) String userId) {
-        String owner = identity.require(userId);
-        long count = resumeRepository.findAll().stream().filter(item -> owns(item, owner)).count();
-        return ApiResult.success(Map.of("totalCount", count, "totalInterviewCount",
-                interviewSessionRepository.findByUserIdOrderByCreatedAtDesc(owner).size(), "totalAccessCount", 0L));
     }
 
     private ResumeEntity owned(String id, String userId) {
@@ -259,5 +305,13 @@ public class ResumeController {
     private boolean owns(ResumeEntity resume, String userId) {
         return candidateRepository.findById(resume.getCandidateId())
                 .map(candidate -> userId.equals(candidate.getUserId())).orElse(false);
+    }
+
+    private InterviewView toInterviewView(InterviewSessionEntity session) {
+        return new InterviewView(
+                session.getId(), session.getUserId(), session.getCandidateId(), session.getResumeId(),
+                session.getJdId(), session.getSkillId(), session.getDifficulty(),
+                session.getTotalQuestions(), session.getStatus().name(), session.getAgentStateVersion(),
+                session.getCurrentQuestion(), session.getCurrentStage(), session.getCreatedAt(), session.getUpdatedAt());
     }
 }

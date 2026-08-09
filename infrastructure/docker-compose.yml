@@ -79,6 +79,7 @@ services:
       PYTHON_AGENT_BASE_URL: http://python-agent:8000
       AGENT_FILE_STORAGE_ROOT: /app/data/files
       AGENT_PDF_FONT_PATH: /app/fonts/NotoSansCJKsc-Regular.otf
+      AGENT_SYSTEM_KNOWLEDGE_BASE_IDS: ${AGENT_SYSTEM_KNOWLEDGE_BASE_IDS:?set AGENT_SYSTEM_KNOWLEDGE_BASE_IDS in .env}
     volumes:
       - java-files:/app/data
       - ./fonts:/app/fonts:ro

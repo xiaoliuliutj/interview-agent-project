@@ -1,6 +1,6 @@
 import {Link, Outlet, useLocation, useNavigate} from 'react-router-dom';
 import {motion} from 'framer-motion';
-import {Calendar, ChevronRight, Database, FileStack, MessageSquare, Moon, Sparkles, Sun, Users,} from 'lucide-react';
+import {ChevronRight, Database, FileStack, Moon, Sparkles, Sun, Users,} from 'lucide-react';
 import {useTheme} from '../hooks/useTheme';
 import {useState} from 'react';
 import UnifiedInterviewModal, {UnifiedInterviewConfig} from './UnifiedInterviewModal';
@@ -25,16 +25,14 @@ export default function Layout() {
   const {theme, toggleTheme} = useTheme();
   const navigate = useNavigate();
   const [interviewModalPreset, setInterviewModalPreset] = useState<{
-    defaultMode: 'text' | 'voice';
-    defaultResumeId?: number;
+    defaultResumeId?: string;
     title: string;
     subtitle: string;
     startButtonText: string;
   } | null>(null);
 
-  const openInterviewModalWithResume = (resumeId: number) => {
+  const openInterviewModalWithResume = (resumeId: string) => {
     setInterviewModalPreset({
-      defaultMode: 'text',
       defaultResumeId: resumeId,
       title: '开始模拟面试',
       subtitle: '配置面试参数，开始练习',
@@ -44,36 +42,17 @@ export default function Layout() {
 
   const handleInterviewStart = (config: UnifiedInterviewConfig) => {
     setInterviewModalPreset(null);
-    if (config.mode === 'text') {
-      navigate('/interview', {
-        state: {
-          resumeId: config.resumeId,
-          interviewConfig: {
-            skillId: config.skillId,
-            difficulty: config.difficulty,
-            questionCount: config.questionCount,
-            llmProvider: config.llmProvider,
-          },
-        },
-      });
-      return;
-    }
-
-    const params = new URLSearchParams({
-      skillId: config.skillId,
-      difficulty: config.difficulty,
-    });
-    navigate(`/voice-interview?${params.toString()}`, {
+    navigate('/interview', {
       state: {
-        voiceConfig: {
+        resumeId: config.resumeId,
+        interviewConfig: {
           skillId: config.skillId,
           difficulty: config.difficulty,
-          techEnabled: true,
-          projectEnabled: true,
-          hrEnabled: true,
-          plannedDuration: config.plannedDuration,
-          resumeId: config.resumeId,
-          llmProvider: config.llmProvider,
+          questionCount: config.questionCount,
+          targetRole: config.targetRole,
+          interviewDurationMinutes: config.plannedDuration,
+          jdText: config.jdText,
+          customCategories: config.customCategories,
         },
       },
     });
@@ -86,9 +65,8 @@ export default function Layout() {
       title: '面试准备',
       items: [
         { id: 'resumes', path: '/history', label: '简历管理', icon: FileStack, description: '管理简历，AI 分析' },
-        { id: 'interview-hub', path: '/interview-hub', label: '模拟面试', icon: Sparkles, description: '文字/语音面试练习' },
+        { id: 'interview-hub', path: '/interview-hub', label: '模拟面试', icon: Sparkles, description: '文本面试练习' },
         { id: 'interviews', path: '/interviews', label: '面试记录', icon: Users, description: '查看面试历史' },
-        { id: 'interview-schedule', path: '/interview-schedule', label: '面试日程', icon: Calendar, description: '管理面试安排' },
       ],
     },
     {
@@ -96,7 +74,6 @@ export default function Layout() {
       title: '知识库',
       items: [
         { id: 'kb-manage', path: '/knowledgebase', label: '知识库管理', icon: Database, description: '管理知识文档' },
-        { id: 'chat', path: '/knowledgebase/chat', label: '问答助手', icon: MessageSquare, description: '基于知识库问答' },
       ],
     },
   ];
@@ -114,7 +91,7 @@ export default function Layout() {
       return currentPath === '/interview-hub'
         || currentPath === '/interview'
         || currentPath.startsWith('/interview/')
-        || currentPath.startsWith('/voice-interview');
+        || currentPath.startsWith('/interviews');
     }
     if (path === '/knowledgebase') {
       return currentPath === '/knowledgebase' || currentPath === '/knowledgebase/upload';
@@ -238,9 +215,7 @@ export default function Layout() {
         isOpen={interviewModalPreset !== null}
         onClose={() => setInterviewModalPreset(null)}
         onStart={handleInterviewStart}
-        defaultMode={interviewModalPreset?.defaultMode || 'text'}
         defaultResumeId={interviewModalPreset?.defaultResumeId}
-        hideModeSwitch={interviewModalPreset?.defaultResumeId == null}
         title={interviewModalPreset?.title || '开始模拟面试'}
         subtitle={interviewModalPreset?.subtitle || '选择面试模式和主题，快速开始'}
         startButtonText={interviewModalPreset?.startButtonText || '开始面试'}

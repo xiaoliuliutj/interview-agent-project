@@ -26,16 +26,12 @@ public class InterviewSessionEntity {
     private InterviewSessionStatus status;
     @Version
     private long stateVersion;
+    /** Python Agent 会话版本；与 JPA 行版本分离，用于跨层一致性校验。 */
+    private long agentStateVersion;
     @Column(columnDefinition = "TEXT")
     private String currentQuestion;
-    @Column(columnDefinition = "TEXT")
-    private String draftAnswer;
-    private Integer overallScore;
-    @Column(columnDefinition = "TEXT")
-    private String finalSummary;
-    private String evaluateStatus;
-    @Column(columnDefinition = "TEXT")
-    private String evaluateError;
+    @Column(name = "current_stage", length = 32)
+    private String currentStage;
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -47,13 +43,14 @@ public class InterviewSessionEntity {
             String userId,
             String candidateId,
             String resumeId,
-            String jdId) {
+            String jdId,
+            int totalQuestions) {
         this.id = id;
         this.userId = userId;
         this.candidateId = candidateId;
         this.resumeId = resumeId;
         this.jdId = jdId;
-        this.totalQuestions = 6;
+        this.totalQuestions = totalQuestions;
         this.status = InterviewSessionStatus.INITIALIZING;
         this.createdAt = Instant.now();
         this.updatedAt = this.createdAt;
@@ -64,17 +61,6 @@ public class InterviewSessionEntity {
         this.difficulty = difficulty;
     }
 
-    public InterviewSessionEntity(
-            String id,
-            String userId,
-            String candidateId,
-            String resumeId,
-            String jdId,
-            int totalQuestions) {
-        this(id, userId, candidateId, resumeId, jdId);
-        this.totalQuestions = Math.max(1, totalQuestions);
-    }
-
     public void activate(String question) {
         this.status = InterviewSessionStatus.ACTIVE;
         this.currentQuestion = question;
@@ -82,25 +68,28 @@ public class InterviewSessionEntity {
     }
 
     public void applyAgentResponse(String answer, String lowerStatus) {
+        applyAgentResponse(answer, lowerStatus, agentStateVersion);
+    }
+
+    public void applyAgentResponse(String answer, String lowerStatus, long lowerStateVersion) {
+        applyAgentResponse(answer, lowerStatus, lowerStateVersion, currentStage);
+    }
+
+    public void applyAgentResponse(String answer, String lowerStatus, long lowerStateVersion, String lowerCurrentStage) {
+        if (lowerStateVersion < agentStateVersion) {
+            throw new IllegalArgumentException("lower Agent state version moved backwards");
+        }
         this.currentQuestion = answer;
-        this.draftAnswer = null;
         this.status = switch (lowerStatus) {
             case "COMPLETED" -> InterviewSessionStatus.COMPLETED;
             case "PAUSED" -> InterviewSessionStatus.PAUSED;
             case "FAILED" -> InterviewSessionStatus.FAILED;
             default -> InterviewSessionStatus.ACTIVE;
         };
-        this.updatedAt = Instant.now();
-    }
-
-    public void applyFinalEvaluation(Integer score, String summary) {
-        this.overallScore = score;
-        this.finalSummary = summary;
-        this.updatedAt = Instant.now();
-    }
-
-    public void saveDraft(String answer) {
-        this.draftAnswer = answer == null ? "" : answer;
+        this.agentStateVersion = lowerStateVersion;
+        if (lowerCurrentStage != null && !lowerCurrentStage.isBlank()) {
+            this.currentStage = lowerCurrentStage;
+        }
         this.updatedAt = Instant.now();
     }
 
@@ -119,12 +108,9 @@ public class InterviewSessionEntity {
     public int getTotalQuestions() { return totalQuestions; }
     public InterviewSessionStatus getStatus() { return status; }
     public long getStateVersion() { return stateVersion; }
+    public long getAgentStateVersion() { return agentStateVersion; }
     public String getCurrentQuestion() { return currentQuestion; }
-    public String getDraftAnswer() { return draftAnswer; }
-    public Integer getOverallScore() { return overallScore; }
-    public String getFinalSummary() { return finalSummary; }
-    public String getEvaluateStatus() { return evaluateStatus; }
-    public String getEvaluateError() { return evaluateError; }
+    public String getCurrentStage() { return currentStage; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
 }

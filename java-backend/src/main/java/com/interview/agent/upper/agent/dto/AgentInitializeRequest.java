@@ -1,29 +1,37 @@
 package com.interview.agent.upper.agent.dto;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import java.util.List;
 import java.util.Map;
+import java.time.Instant;
 
 public record AgentInitializeRequest(
-        String apiVersion,
+        @NotBlank String apiVersion,
         @NotBlank String requestId,
         @NotBlank String runId,
         @NotBlank String userId,
         @NotBlank String sessionId,
-        @Valid @NotNull CandidateSnapshot candidate) {
+        @NotBlank String operation,
+        @Valid @NotNull CandidateSnapshot candidate,
+        @NotNull Instant timestamp) {
 
     public record CandidateSnapshot(
             @NotBlank String candidateId,
             @NotBlank String resumeId,
             String jdId,
-            String resumeText,
+            @NotBlank String resumeText,
             String jdText,
             @NotBlank String targetRole,
-            Integer interviewDurationMinutes,
-            String desiredDifficulty,
+            @NotNull @Min(15) @Max(120) Integer interviewDurationMinutes,
+            @NotBlank String desiredDifficulty,
+            @NotNull @Min(2) @Max(30) Integer questionCount,
             String requestedSkillId,
-            List<Map<String, Object>> customCategories) {
+            @NotNull List<Map<String, Object>> customCategories,
+            @NotNull List<String> systemKnowledgeBaseIds,
+            @NotNull List<String> userKnowledgeBaseIds) {
     }
 }

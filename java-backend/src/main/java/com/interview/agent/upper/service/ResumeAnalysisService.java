@@ -8,7 +8,6 @@ import com.interview.agent.upper.domain.ResumeAnalysisEntity;
 import com.interview.agent.upper.domain.ResumeEntity;
 import com.interview.agent.upper.repository.CandidateRepository;
 import com.interview.agent.upper.repository.ResumeRepository;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -21,40 +20,41 @@ public class ResumeAnalysisService {
     private final ResumeAnalysisPersistenceService persistence;
     private final ResumeAnalysisWorker worker;
     private final ObjectMapper objectMapper;
-    private final String defaultTargetRole;
 
-    public ResumeAnalysisService(
-            ResumeRepository resumeRepository,
-            CandidateRepository candidateRepository,
-            ResumeAnalysisPersistenceService persistence,
-            ResumeAnalysisWorker worker,
-            ObjectMapper objectMapper,
-            @Value("${agent.default-target-role:Java 后端}") String defaultTargetRole) {
+    public ResumeAnalysisService(ResumeRepository resumeRepository,
+                                 CandidateRepository candidateRepository,
+                                 ResumeAnalysisPersistenceService persistence,
+                                 ResumeAnalysisWorker worker,
+                                 ObjectMapper objectMapper) {
         this.resumeRepository = resumeRepository;
         this.candidateRepository = candidateRepository;
         this.persistence = persistence;
         this.worker = worker;
         this.objectMapper = objectMapper;
-        this.defaultTargetRole = defaultTargetRole;
     }
 
-    public ResumeAnalysisView submit(String resumeId, String userId) {
+    public ResumeAnalysisView submit(String resumeId, String userId, String targetRole) {
+        if (targetRole == null || targetRole.isBlank()) {
+            throw new BusinessException("TARGET_ROLE_REQUIRED", "targetRole is required for resume analysis");
+        }
         ResumeEntity resume = requiredResume(resumeId);
         CandidateEntity candidate = candidateRepository.findById(resume.getCandidateId())
-                .orElseThrow(() -> new BusinessException("CANDIDATE_NOT_FOUND", "候选人不存在"));
-        if (!candidate.getUserId().equals(userId)) {
-            throw new BusinessException("RESUME_ACCESS_DENIED", "无权分析该简历");
+                .orElseThrow(() -> new BusinessException("CANDIDATE_NOT_FOUND", "candidate not found"));
+        if (!userId.equals(candidate.getUserId())) {
+            throw new BusinessException("RESUME_ACCESS_DENIED", "resume does not belong to current user");
         }
-        ResumeAnalysisEntity analysis = persistence.create(resumeId);
+        // Reanalysis of the same current resume replaces the previous pending run.
+        // Keeping two runnable tasks for one resume would allow a slower response to
+        // overwrite a newer result for the same target role.
+        persistence.cancelActiveForResumeIds(List.of(resumeId));
+        ResumeAnalysisEntity analysis = persistence.create(resumeId, targetRole.strip());
         try {
             worker.enqueue(analysis.getId(), userId);
+            return toView(analysis);
         } catch (RuntimeException error) {
-            String message = error.getMessage() == null ? error.getClass().getSimpleName()
-                    : error.getMessage();
-            persistence.fail(analysis.getId(), message);
+            persistence.fail(analysis.getId(), safeMessage(error));
             throw error;
         }
-        return toView(analysis);
     }
 
     public ResumeAnalysisView latest(String resumeId) {
@@ -68,31 +68,37 @@ public class ResumeAnalysisService {
 
     public void deleteByResumeId(String resumeId) { persistence.deleteByResumeId(resumeId); }
 
+    public void cancelActiveForResumeIds(List<String> resumeIds) {
+        persistence.cancelActiveForResumeIds(resumeIds);
+    }
+
     private ResumeEntity requiredResume(String resumeId) {
         return resumeRepository.findById(resumeId)
-                .orElseThrow(() -> new BusinessException("RESUME_NOT_FOUND", "简历不存在"));
+                .orElseThrow(() -> new BusinessException("RESUME_NOT_FOUND", "resume not found"));
     }
 
     private ResumeAnalysisView toView(ResumeAnalysisEntity entity) {
-        return new ResumeAnalysisView(
-                entity.getId(), entity.getStatus(), entity.getOverallScore(),
-                entity.getContentScore(), entity.getStructureScore(),
-                entity.getSkillMatchScore(), entity.getExpressionScore(),
-                entity.getProjectScore(), entity.getSummary(), entity.getUpdatedAt(),
+        return new ResumeAnalysisView(entity.getId(), entity.getStatus(), entity.getOverallScore(),
+                entity.getContentScore(), entity.getStructureScore(), entity.getSkillMatchScore(),
+                entity.getExpressionScore(), entity.getProjectScore(), entity.getSummary(), entity.getUpdatedAt(),
                 stringList(entity.getStrengthsJson()), stringList(entity.getSuggestionsJson()),
-                mapList(entity.getIssuesJson()),
-                entity.getError());
+                mapList(entity.getIssuesJson()), entity.getError());
     }
 
     private List<String> stringList(String raw) {
         if (raw == null || raw.isBlank()) return List.of();
         try { return objectMapper.readValue(raw, new TypeReference<>() { }); }
-        catch (Exception error) { return List.of(); }
+        catch (Exception ignored) { return List.of(); }
     }
 
     private List<Map<String, Object>> mapList(String raw) {
         if (raw == null || raw.isBlank()) return List.of();
         try { return objectMapper.readValue(raw, new TypeReference<>() { }); }
-        catch (Exception error) { return List.of(); }
+        catch (Exception ignored) { return List.of(); }
+    }
+
+    private static String safeMessage(RuntimeException error) {
+        String message = error.getMessage();
+        return message == null ? error.getClass().getSimpleName() : message.substring(0, Math.min(500, message.length()));
     }
 }

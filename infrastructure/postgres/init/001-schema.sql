@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS candidates (
     id VARCHAR(255) PRIMARY KEY,
     user_id VARCHAR(255),
     display_name VARCHAR(255)
+    ,current_resume_id VARCHAR(255)
 );
 
 CREATE TABLE IF NOT EXISTS resumes (
@@ -19,10 +20,12 @@ CREATE TABLE IF NOT EXISTS resumes (
     created_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_resumes_file_hash ON resumes(file_hash);
+CREATE INDEX IF NOT EXISTS idx_resumes_candidate_file_hash ON resumes(candidate_id, file_hash);
 
 CREATE TABLE IF NOT EXISTS resume_analyses (
     id BIGSERIAL PRIMARY KEY,
     resume_id VARCHAR(255) NOT NULL,
+    target_role VARCHAR(255) NOT NULL,
     status VARCHAR(32) NOT NULL,
     overall_score INTEGER,
     content_score INTEGER,
@@ -35,6 +38,8 @@ CREATE TABLE IF NOT EXISTS resume_analyses (
     suggestions_json TEXT,
     issues_json TEXT,
     error VARCHAR(500),
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
 );
@@ -57,15 +62,12 @@ CREATE TABLE IF NOT EXISTS interview_sessions (
     jd_id VARCHAR(255),
     skill_id VARCHAR(255),
     difficulty VARCHAR(32),
-    total_questions INTEGER NOT NULL DEFAULT 6,
+    total_questions INTEGER NOT NULL,
     status VARCHAR(32),
     state_version BIGINT NOT NULL DEFAULT 0,
+    agent_state_version BIGINT NOT NULL DEFAULT 0,
     current_question TEXT,
-    draft_answer TEXT,
-    overall_score INTEGER,
-    final_summary TEXT,
-    evaluate_status VARCHAR(32),
-    evaluate_error TEXT,
+    current_stage VARCHAR(32),
     created_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ
 );
@@ -76,35 +78,7 @@ CREATE TABLE IF NOT EXISTS interview_turns (
     run_id VARCHAR(255) UNIQUE,
     question TEXT,
     candidate_answer TEXT,
-    evaluation_summary TEXT,
-    score INTEGER,
-    answer_summary TEXT,
-    strengths_json TEXT,
-    weaknesses_json TEXT,
-    preferences_json TEXT,
     stage VARCHAR(32),
-    created_at TIMESTAMPTZ
-);
-
-CREATE TABLE IF NOT EXISTS interview_tasks (
-    id VARCHAR(255) PRIMARY KEY,
-    task_type VARCHAR(255),
-    status VARCHAR(32),
-    session_id VARCHAR(255),
-    error_message VARCHAR(500),
-    created_at TIMESTAMPTZ,
-    updated_at TIMESTAMPTZ
-);
-
-CREATE TABLE IF NOT EXISTS interview_schedules (
-    id BIGSERIAL PRIMARY KEY,
-    user_id VARCHAR(255),
-    title VARCHAR(255),
-    start_at TIMESTAMPTZ,
-    end_at TIMESTAMPTZ,
-    source VARCHAR(64),
-    status VARCHAR(32),
-    raw_text TEXT,
     created_at TIMESTAMPTZ
 );
 
@@ -121,38 +95,11 @@ CREATE TABLE IF NOT EXISTS knowledge_bases (
     vector_status VARCHAR(32),
     vector_error VARCHAR(500),
     chunk_count INTEGER NOT NULL DEFAULT 0,
-    access_count BIGINT NOT NULL DEFAULT 0,
-    question_count BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_bases_owner_created
     ON knowledge_bases (owner_id, created_at DESC);
-
-CREATE TABLE IF NOT EXISTS rag_chat_sessions (
-    id BIGSERIAL PRIMARY KEY,
-    user_id VARCHAR(255) NOT NULL,
-    title VARCHAR(120) NOT NULL,
-    knowledge_base_ids VARCHAR(4000) NOT NULL DEFAULT '',
-    pinned BOOLEAN NOT NULL DEFAULT FALSE,
-    version BIGINT NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_rag_chat_sessions_user_updated
-    ON rag_chat_sessions (user_id, updated_at DESC);
-
-CREATE TABLE IF NOT EXISTS rag_chat_messages (
-    id BIGSERIAL PRIMARY KEY,
-    session_id BIGINT NOT NULL REFERENCES rag_chat_sessions(id) ON DELETE CASCADE,
-    type VARCHAR(16) NOT NULL,
-    content TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_rag_chat_messages_session_created
-    ON rag_chat_messages (session_id, created_at);
 
 CREATE TABLE IF NOT EXISTS agent_interview_sessions (
     session_id VARCHAR(128) PRIMARY KEY,

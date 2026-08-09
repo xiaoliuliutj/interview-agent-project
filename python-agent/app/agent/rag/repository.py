@@ -12,6 +12,10 @@ class VectorRepository(Protocol):
 
     async def add(self, chunks: list[KnowledgeChunk]) -> None: ...
 
+    async def replace_for_knowledge_base(
+        self, knowledge_base_id: str, chunks: list[KnowledgeChunk]
+    ) -> None: ...
+
     async def search(
         self,
         query_embedding: list[float],
@@ -39,6 +43,12 @@ class InMemoryVectorRepository:
 
     async def add(self, chunks: list[KnowledgeChunk]) -> None:
         self._chunks.update({chunk.chunk_id: chunk.model_copy(deep=True) for chunk in chunks})
+
+    async def replace_for_knowledge_base(
+        self, knowledge_base_id: str, chunks: list[KnowledgeChunk]
+    ) -> None:
+        await self.delete_by_knowledge_base(knowledge_base_id)
+        await self.add(chunks)
 
     async def search(
         self,

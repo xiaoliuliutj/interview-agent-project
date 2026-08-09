@@ -9,9 +9,9 @@ import {formatDateOnly} from '../utils/date';
 import {CheckSquare, ChevronLeft, Clock, Download, MessageSquare, Mic} from 'lucide-react';
 
 interface ResumeDetailPageProps {
-  resumeId: number;
+  resumeId: string;
   onBack: () => void;
-  onStartInterview: (resumeId: number) => void;
+  onStartInterview: (resumeId: string) => void;
 }
 
 type TabType = 'analysis' | 'interview';
@@ -59,9 +59,9 @@ export default function ResumeDetailPage({ resumeId, onBack, onStartInterview }:
   // 待处理判断：显式的 PENDING/PROCESSING 状态，或状态未定义且无分析结果
   useEffect(() => {
     const isProcessing = resume && (
-      resume.analyzeStatus === 'PENDING' ||
-      resume.analyzeStatus === 'PROCESSING' ||
-      (resume.analyzeStatus === undefined && (!resume.analyses || resume.analyses.length === 0))
+      resume.analyses?.[0]?.status === 'PENDING' ||
+      resume.analyses?.[0]?.status === 'PROCESSING' ||
+      (!resume.analyses || resume.analyses.length === 0)
     );
 
     if (isProcessing && !loading) {
@@ -76,8 +76,10 @@ export default function ResumeDetailPage({ resumeId, onBack, onStartInterview }:
   // 重新分析
   const handleReanalyze = async () => {
     try {
+      const targetRole = window.prompt('请输入本次简历分析的目标岗位');
+      if (!targetRole || !targetRole.trim()) return;
       setReanalyzing(true);
-      await historyApi.reanalyze(resumeId);
+      await historyApi.reanalyze(resumeId, targetRole.trim());
       await loadResumeDetailSilent();
     } catch (err) {
       console.error('重新分析失败', err);
@@ -128,6 +130,22 @@ export default function ResumeDetailPage({ resumeId, onBack, onStartInterview }:
     }
   };
 
+  const handleDownloadResume = async () => {
+    try {
+      const blob = await historyApi.downloadResume(resumeId);
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = resume?.filename || `resume-${resumeId}`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      alert('下载简历失败，请稍后重试');
+    }
+  };
+
   const handleExportInterviewPdf = async (sessionId: string) => {
     setExporting(sessionId);
     try {
@@ -169,7 +187,7 @@ export default function ResumeDetailPage({ resumeId, onBack, onStartInterview }:
     // 删除后重新加载简历详情
     await loadResumeDetail();
     // 如果删除的是当前查看的面试，返回列表
-    if (selectedInterview?.sessionId === sessionId) {
+    if (selectedInterview?.session.sessionId === sessionId) {
       setDetailView('list');
       setSelectedInterview(null);
     }
@@ -244,12 +262,12 @@ export default function ResumeDetailPage({ resumeId, onBack, onStartInterview }:
           </motion.button>
           <div>
               <h2 className="text-xl font-bold text-slate-900 dark:text-white">
-              {detailView === 'interviewDetail' ? `面试详情 #${selectedInterview?.sessionId?.slice(-6) || ''}` : resume.filename}
+              {detailView === 'interviewDetail' ? `面试详情 #${selectedInterview?.session.sessionId.slice(-6) || ''}` : resume.filename}
             </h2>
               <p className="text-sm text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
               <Clock className="w-4 h-4" />
                   {detailView === 'interviewDetail'
-                ? `完成于 ${formatDateOnly(selectedInterview?.completedAt || selectedInterview?.createdAt || '')}`
+                ? `更新于 ${formatDateOnly(selectedInterview?.session.updatedAt || '')}`
                 : `上传于 ${formatDateOnly(resume.uploadedAt)}`
               }
             </p>
@@ -257,16 +275,27 @@ export default function ResumeDetailPage({ resumeId, onBack, onStartInterview }:
         </div>
 
         <div className="flex gap-3">
+          {detailView !== 'interviewDetail' && (
+            <motion.button
+              onClick={handleDownloadResume}
+              className="px-5 py-2.5 border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 rounded-xl text-slate-600 dark:text-slate-300 font-medium hover:bg-slate-50 transition-all flex items-center gap-2"
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+            >
+              <Download className="w-4 h-4" />
+              下载原简历
+            </motion.button>
+          )}
           {detailView === 'interviewDetail' && selectedInterview && (
             <motion.button
-              onClick={() => handleExportInterviewPdf(selectedInterview.sessionId)}
-              disabled={exporting === selectedInterview.sessionId}
+              onClick={() => handleExportInterviewPdf(selectedInterview.session.sessionId)}
+              disabled={exporting === selectedInterview.session.sessionId}
               className="px-5 py-2.5 border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 rounded-xl text-slate-600 dark:text-slate-300 font-medium hover:bg-slate-50 transition-all disabled:opacity-50 flex items-center gap-2"
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
             >
               <Download className="w-4 h-4" />
-              {exporting === selectedInterview.sessionId ? '导出中...' : '导出 PDF'}
+              {exporting === selectedInterview.session.sessionId ? '导出中...' : '导出 PDF'}
             </motion.button>
           )}
           {detailView !== 'interviewDetail' && (
@@ -333,8 +362,8 @@ export default function ResumeDetailPage({ resumeId, onBack, onStartInterview }:
               {activeTab === 'analysis' ? (
                 <AnalysisPanel
                   analysis={latestAnalysis}
-                  analyzeStatus={resume.analyzeStatus}
-                  analyzeError={resume.analyzeError}
+                  analyzeStatus={latestAnalysis?.status}
+                  analyzeError={latestAnalysis?.error ?? undefined}
                   onExport={handleExportAnalysisPdf}
                   exporting={exporting === 'analysis'}
                   onReanalyze={handleReanalyze}

@@ -1,26 +1,17 @@
 import { request } from './request';
 
-export type AnalyzeStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
-export type EvaluateStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+export type AnalyzeStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
 
 export interface ResumeListItem {
-  id: number;
+  id: string;
   filename: string | null;
   fileSize: number;
   uploadedAt: string;
-  accessCount: number;
-  latestScore?: number;
-  lastAnalyzedAt?: string;
+  latestScore: number | null;
+  lastAnalyzedAt: string | null;
   interviewCount: number;
-  analyzeStatus?: AnalyzeStatus;
-  analyzeError?: string;
-  storageUrl?: string;
-}
-
-export interface ResumeStats {
-  totalCount: number;
-  totalInterviewCount: number;
-  totalAccessCount: number;
+  analyzeStatus: AnalyzeStatus | null;
+  analyzeError: string | null;
 }
 
 export interface AnalysisItem {
@@ -34,128 +25,66 @@ export interface AnalysisItem {
   summary: string;
   analyzedAt: string;
   strengths: string[];
-  suggestions: unknown[];
+  suggestions: string[];
+  status: AnalyzeStatus;
+  error: string | null;
 }
 
 export interface InterviewItem {
-  id: number;
   sessionId: string;
+  userId: string;
+  candidateId: string;
+  resumeId: string;
+  jdId: string | null;
+  skillId: string | null;
+  difficulty: string;
   totalQuestions: number;
-  status: string;
-  evaluateStatus?: EvaluateStatus;
-  evaluateError?: string;
-  overallScore: number | null;
-  overallFeedback: string | null;
+  status: 'INITIALIZING' | 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'FAILED';
+  stateVersion: number;
+  currentQuestion: string | null;
+  currentStage: string | null;
   createdAt: string;
-  completedAt: string | null;
-  questions?: unknown[];
-  strengths?: string[];
-  improvements?: string[];
-  referenceAnswers?: unknown[];
+  updatedAt: string;
 }
 
-export interface AnswerItem {
-  questionIndex: number;
+export interface InterviewTurn {
+  index: number;
+  stage: string;
   question: string;
-  category: string;
-  userAnswer: string;
-  score: number;
-  feedback: string;
-  referenceAnswer?: string;
-  keyPoints?: string[];
-  answeredAt: string;
+  answer: string | null;
+  answeredAt: string | null;
 }
+
+export interface InterviewDetail { session: InterviewItem; turns: InterviewTurn[]; }
 
 export interface ResumeDetail {
-  id: number;
+  id: string;
   filename: string | null;
   fileSize: number;
-  contentType: string;
-  storageUrl: string;
+  contentType: string | null;
   uploadedAt: string;
-  accessCount: number;
   resumeText: string;
-  analyzeStatus?: AnalyzeStatus;
-  analyzeError?: string;
   analyses: AnalysisItem[];
   interviews: InterviewItem[];
 }
 
-export interface InterviewDetail extends InterviewItem {
-  evaluateStatus?: EvaluateStatus;
-  evaluateError?: string;
-  answers: AnswerItem[];
-}
-
 export const historyApi = {
-  /**
-   * 获取所有简历列表
-   */
-  async getResumes(): Promise<ResumeListItem[]> {
-    return request.get<ResumeListItem[]>('/api/resumes');
-  },
-
-  /**
-   * 获取简历详情
-   */
-  async getResumeDetail(id: number): Promise<ResumeDetail> {
-    return request.get<ResumeDetail>(`/api/resumes/${id}/detail`);
-  },
-
-  /**
-   * 获取面试详情
-   */
-  async getInterviewDetail(sessionId: string): Promise<InterviewDetail> {
-    return request.get<InterviewDetail>(`/api/interview/sessions/${sessionId}/details`);
-  },
-
-  /**
-   * 导出简历分析报告PDF
-   */
-  async exportAnalysisPdf(resumeId: number): Promise<Blob> {
-    const response = await request.getInstance().get(`/api/resumes/${resumeId}/export`, {
-      responseType: 'blob',
-      skipResultTransform: true,
-    } as never);
+  getResumes: () => request.get<ResumeListItem[]>('/api/resumes'),
+  getResumeDetail: (id: string | number) => request.get<ResumeDetail>(`/api/resumes/${id}/detail`),
+  getInterviewDetail: (sessionId: string) => request.get<InterviewDetail>(`/api/interviews/${sessionId}`),
+  async exportAnalysisPdf(resumeId: string | number): Promise<Blob> {
+    const response = await request.getInstance().get(`/api/resumes/${resumeId}/export`, { responseType: 'blob', skipResultTransform: true } as never);
     return response.data;
   },
-
-  /**
-   * 导出面试报告PDF
-   */
+  async downloadResume(resumeId: string | number): Promise<Blob> {
+    const response = await request.getInstance().get(`/api/resumes/${resumeId}/download`, { responseType: 'blob', skipResultTransform: true } as never);
+    return response.data;
+  },
   async exportInterviewPdf(sessionId: string): Promise<Blob> {
-    const response = await request.getInstance().get(`/api/interview/sessions/${sessionId}/export`, {
-      responseType: 'blob',
-      skipResultTransform: true,
-    } as never);
+    const response = await request.getInstance().get(`/api/interviews/${sessionId}/export`, { responseType: 'blob', skipResultTransform: true } as never);
     return response.data;
   },
-
-  /**
-   * 删除简历
-   */
-  async deleteResume(id: number): Promise<void> {
-    return request.delete(`/api/resumes/${id}`);
-  },
-
-  /**
-   * 删除面试记录
-   */
-  async deleteInterview(sessionId: string): Promise<void> {
-    return request.delete(`/api/interview/sessions/${sessionId}`);
-  },
-
-  /**
-   * 获取简历统计信息
-   */
-  async getStatistics(): Promise<ResumeStats> {
-    return request.get<ResumeStats>('/api/resumes/statistics');
-  },
-
-  /**
-   * 重新分析简历
-   */
-  async reanalyze(id: number): Promise<void> {
-    return request.post(`/api/resumes/${id}/reanalyze`);
-  },
+  deleteResume: (id: string | number) => request.delete<void>(`/api/resumes/${id}`),
+  deleteInterview: (sessionId: string) => request.delete<void>(`/api/interviews/${sessionId}`),
+  reanalyze: (id: string | number, targetRole: string) => request.post(`/api/resumes/${id}/reanalyze?targetRole=${encodeURIComponent(targetRole)}`),
 };

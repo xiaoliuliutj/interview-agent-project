@@ -1,5 +1,6 @@
 package com.interview.agent.upper.service;
 
+import com.interview.agent.upper.api.dto.InterviewTurnView;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -13,9 +14,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
-/** 将已持久化的面试报告渲染为可下载 PDF；中文字体由部署环境提供。 */
+/** Renders the candidate-visible interview transcript as a downloadable PDF. */
 @Service
 public class InterviewReportPdfService {
     private final Path fontPath;
@@ -25,49 +25,38 @@ public class InterviewReportPdfService {
                 ? null : Path.of(configuredFontPath);
     }
 
-    public byte[] render(String sessionId, String status, int totalQuestions, Map<String, Object> report) {
+    public byte[] render(String sessionId, String status, int totalQuestions,
+                         List<InterviewTurnView> turns) {
         if (fontPath == null || !Files.isRegularFile(fontPath)) {
             throw new BusinessException("INTERVIEW_PDF_FONT_REQUIRED",
                     "AGENT_PDF_FONT_PATH must point to a readable CJK font");
         }
         try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             PDType0Font font = PDType0Font.load(document, fontPath.toFile());
-            addPages(document, font, reportLines(sessionId, status, totalQuestions, report));
+            addPages(document, font, reportLines(sessionId, status, totalQuestions, turns));
             document.save(output);
             return output.toByteArray();
         } catch (IOException error) {
-            throw new BusinessException("INTERVIEW_PDF_EXPORT_FAILED", "无法生成面试报告 PDF");
+            throw new BusinessException("INTERVIEW_PDF_EXPORT_FAILED", "unable to generate interview PDF");
         }
     }
 
-    private List<String> reportLines(String sessionId, String status, int totalQuestions, Map<String, Object> report) {
+    private List<String> reportLines(String sessionId, String status, int totalQuestions,
+                                     List<InterviewTurnView> turns) {
         List<String> lines = new ArrayList<>();
-        lines.add("模拟面试报告");
+        lines.add("模拟面试记录");
         lines.add("会话 ID: " + sessionId);
         lines.add("状态: " + status);
-        lines.add("题目数量: " + totalQuestions);
-        lines.add("综合得分: " + report.getOrDefault("overallScore", "-"));
-        lines.add("综合反馈: " + report.getOrDefault("overallFeedback", ""));
+        lines.add("规划题数: " + totalQuestions);
         lines.add("");
-        Object details = report.get("questionDetails");
-        if (details instanceof List<?> turns) {
-            int index = 1;
-            for (Object turnObject : turns) {
-                if (!(turnObject instanceof Map<?, ?> rawTurn)) continue;
-                lines.add("第 " + index++ + " 题");
-                lines.add("问题: " + value(rawTurn, "question"));
-                lines.add("回答: " + value(rawTurn, "userAnswer"));
-                lines.add("得分: " + value(rawTurn, "score"));
-                lines.add("评价: " + value(rawTurn, "feedback"));
-                lines.add("");
-            }
+        int index = 1;
+        for (InterviewTurnView turn : turns) {
+            lines.add("第 " + index++ + " 题（" + turn.stage() + "）");
+            lines.add("问题: " + turn.question());
+            lines.add("回答: " + (turn.answer() == null ? "" : turn.answer()));
+            lines.add("");
         }
         return lines;
-    }
-
-    private String value(Map<?, ?> values, String key) {
-        Object value = values.get(key);
-        return value == null ? "" : String.valueOf(value);
     }
 
     private void addPages(PDDocument document, PDType0Font font, List<String> sourceLines) throws IOException {
