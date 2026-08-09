@@ -40,3 +40,6 @@ infrastructure/fonts/*
 # Temporary assistant workspace
 _scratch/*
 !_scratch/.gitkeep
+
+# Git bundle export artifacts
+*.bundle
