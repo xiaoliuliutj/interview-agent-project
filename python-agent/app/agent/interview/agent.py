@@ -14,6 +14,7 @@ from .models import (
     InterviewRoute,
     InterviewSession,
     InterviewSummary,
+    InterviewStage,
 )
 
 
@@ -46,13 +47,17 @@ class InterviewPlanner:
             model=self._model, schema=InterviewPlan, business_prompt=system_prompt,
             input_payload=input_payload,
         )
-        planned_question_count = sum(item.max_primary_questions for item in result.stages)
-        if planned_question_count != profile.question_count:
-            raise ValueError(
-                f"面试计划题量与上层请求不一致: expected={profile.question_count}, actual={planned_question_count}"
-            )
         if any(item.difficulty != profile.desired_difficulty for item in result.stages):
             raise ValueError("面试计划阶段难度与上层请求不一致")
+        # 非固定阶段的题量是上限，不是模型在初始化时分配的最终数量。
+        # 统一提升为最多 4 道，实际是否继续由每轮路由决定。
+        normalized_stages = []
+        for item in result.stages:
+            if item.stage in {InterviewStage.OPENING, InterviewStage.SUMMARY} or item.max_primary_questions == 0:
+                normalized_stages.append(item)
+            else:
+                normalized_stages.append(item.model_copy(update={"max_primary_questions": 4}))
+        result = result.model_copy(update={"stages": normalized_stages})
         # Skill 选择属于下层 Agent 决策，写入计划快照，后续恢复会话不重新漂移。
         if not result.selected_skills:
             result = result.model_copy(update={"selected_skills": [item.skill_id for item in skills]})
@@ -88,9 +93,10 @@ class InterviewEvaluationAgent:
             "cached_question_reference": session.current_question_evidence,
             "candidate_answer": candidate_answer,
             "short_term_memory": memory_context.recent_turns,
+            "conversation_summary": memory_context.conversation_summary,
             "long_term_memory": {
                 "historical_summary": memory_context.historical_summary,
-                "active_resume": memory_context.active_resume,
+                "active_resume": memory_context.active_resume.model_dump(mode="json") if memory_context.active_resume else None,
                 "technical_stack": memory_context.technical_stack,
                 "technical_depth": memory_context.technical_depth,
                 "preferences": memory_context.preferences,
@@ -140,13 +146,27 @@ class InterviewRoutingAgent:
         context = {
             "current_stage": session.current_stage,
             "current_question": session.current_question,
+            "current_topic": session.current_topic,
             "evaluation": evaluation.model_dump(mode="json"),
             "primary_question_count": session.primary_question_count,
+            "total_primary_question_count": session.total_primary_question_count,
+            "target_question_count": session.target_question_count,
             "followup_count": session.followup_count,
             "stage_plan": session.plan.get_stage(session.current_stage),
             "allowed_actions": sorted(allowed_actions),
             "next_stage": next_stage_name,
+            "stage_question_counts": session.stage_question_counts,
+            "topic_question_counts": session.topic_question_counts,
             "question_catalog": memory_context.question_catalog,
+            "recent_turns": memory_context.recent_turns,
+            "conversation_summary": memory_context.conversation_summary,
+            "candidate_context": {
+                "active_resume": memory_context.active_resume.model_dump(mode="json") if memory_context.active_resume else None,
+                "technical_stack": memory_context.technical_stack,
+                "technical_depth": memory_context.technical_depth,
+                "preferences": memory_context.preferences,
+                "notes": memory_context.notes,
+            },
             "weak_topics": memory_context.weak_topics,
         }
         skill_ids = session.selected_skills or session.plan.selected_skills or ["interview-coach"]
@@ -187,6 +207,17 @@ class InterviewQuestionAgent:
             "topic": route.next_topic,
             "askedQuestions": session.asked_question_catalog,
             "recentTurns": memory_context.recent_turns,
+            "conversationSummary": memory_context.conversation_summary,
+            "candidateContext": {
+                "activeResume": memory_context.active_resume.model_dump(mode="json") if memory_context.active_resume else None,
+                "technicalStack": memory_context.technical_stack,
+                "technicalDepth": memory_context.technical_depth,
+                "preferences": memory_context.preferences,
+                "notes": memory_context.notes,
+            },
+            "stageQuestionCounts": session.stage_question_counts,
+            "topicQuestionCounts": session.topic_question_counts,
+            "targetQuestionCount": session.target_question_count,
             "ragEvidence": evidence,
         }
         result = await self._structured_output.invoke(

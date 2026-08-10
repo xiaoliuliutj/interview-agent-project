@@ -67,6 +67,8 @@ class MemoryContext(BaseModel):
     """一次 Agent 决策允许读取的上下文视图。"""
 
     recent_turns: list[TurnRecord]
+    # 当前会话较早轮次的压缩摘要；原始轮次仍在会话持久化中保留。
+    conversation_summary: str = ""
     historical_summary: str
     active_resume: ResumeMemory | None
     technical_stack: list[str]
@@ -80,6 +82,7 @@ class MemoryContext(BaseModel):
     def empty(cls, session: InterviewSession) -> "MemoryContext":
         return cls(
             recent_turns=[],
+            conversation_summary=getattr(session, "history_summary", ""),
             historical_summary="",
             active_resume=None,
             technical_stack=[],

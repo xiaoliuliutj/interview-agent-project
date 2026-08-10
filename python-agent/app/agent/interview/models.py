@@ -19,6 +19,11 @@ class InterviewStage(StrEnum):
     SUMMARY = "SUMMARY"
 
 
+# 这些是下层的硬边界，模型只能在边界内做软决策。
+MAX_PRIMARY_QUESTIONS_PER_STAGE = 4
+MAX_QUESTIONS_PER_TOPIC = 3
+
+
 class InterviewAction(StrEnum):
     FOLLOW_UP = "FOLLOW_UP"
     NEXT_QUESTION = "NEXT_QUESTION"
@@ -38,7 +43,7 @@ class CandidateProfile(BaseModel):
     candidate_id: str
     resume_id: str
     jd_id: str | None = None
-    resume_text: str = Field(min_length=1)
+    resume_text: str | None = None
     jd_text: str | None
     target_role: str
     interview_duration_minutes: int = Field(ge=15, le=120)
@@ -81,6 +86,9 @@ class InterviewPlan(BaseModel):
             raise ValueError("OPENING 阶段固定一轮")
         if stage_by_name[InterviewStage.SUMMARY].max_primary_questions != 1:
             raise ValueError("SUMMARY 阶段固定一次输出")
+        for item in self.stages:
+            if item.max_primary_questions > MAX_PRIMARY_QUESTIONS_PER_STAGE:
+                raise ValueError("单个阶段的主问题上限不能超过 4")
         return self
 
     def get_stage(self, stage: InterviewStage) -> StagePlan:
@@ -114,6 +122,7 @@ class TurnRecord(BaseModel):
     turn_id: str = Field(default_factory=lambda: uuid4().hex, min_length=1)
     run_id: str | None = None
     stage: InterviewStage
+    topic: str | None = None
     question: str
     candidate_answer: str
     action: InterviewAction
@@ -158,12 +167,21 @@ class InterviewSession(BaseModel):
     candidate_id: str
     resume_id: str
     jd_id: str | None = None
+    resume_text: str = Field(min_length=1)
+    jd_text: str | None = None
+    target_role: str | None = None
+    interview_duration_minutes: int | None = Field(default=None, ge=15, le=120)
+    requested_skill_id: str | None = None
+    custom_categories: list[dict[str, Any]] = Field(default_factory=list)
     difficulty: Difficulty
     selected_skills: list[str] = Field(default_factory=list)
     plan: InterviewPlan
+    # questionCount 是总主问题预算，不是初始化时分配给各阶段的固定数量。
+    target_question_count: int = Field(default=30, alias="targetQuestionCount", ge=2, le=30)
     status: SessionStatus = SessionStatus.ACTIVE
     current_stage: InterviewStage = InterviewStage.OPENING
     primary_question_count: int = Field(default=1, ge=0)
+    total_primary_question_count: int = Field(default=1, alias="totalPrimaryQuestionCount", ge=0)
     followup_count: int = Field(default=0, ge=0)
     state_version: int = Field(default=0, ge=0)
     current_question: str
@@ -174,6 +192,10 @@ class InterviewSession(BaseModel):
     rag_evidence_cache: dict[str, list[dict[str, object]]] = Field(default_factory=dict)
     turns: list[TurnRecord] = Field(default_factory=list)
     asked_question_catalog: list[str] = Field(default_factory=list)
+    topic_question_counts: dict[str, int] = Field(default_factory=dict, alias="topicQuestionCounts")
+    stage_question_counts: dict[str, int] = Field(default_factory=dict, alias="stageQuestionCounts")
+    history_summary: str = Field(default="", alias="historySummary")
+    current_topic: str | None = Field(default=None, alias="currentTopic")
     final_summary: str | None = None
     final_evaluation: InterviewSummary | None = None
     interrupted: bool = False
@@ -182,3 +204,5 @@ class InterviewSession(BaseModel):
     run_snapshots: dict[str, AgentRunSnapshot] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    model_config = {"populate_by_name": True}

@@ -29,6 +29,8 @@ from .models import (
     InterviewSession,
     InterviewStage,
     TurnRecord,
+    MAX_QUESTIONS_PER_TOPIC,
+    MAX_PRIMARY_QUESTIONS_PER_STAGE,
 )
 from .repository import InterviewSessionRepository
 from .workflow import InterviewWorkflow
@@ -103,17 +105,26 @@ class InterviewAgentService:
             candidate_id=profile.candidate_id,
             resume_id=profile.resume_id,
             jd_id=profile.jd_id,
+            resume_text=profile.resume_text,
+            jd_text=profile.jd_text,
+            target_role=profile.target_role,
+            interview_duration_minutes=profile.interview_duration_minutes,
+            requested_skill_id=profile.requested_skill_id,
+            custom_categories=profile.custom_categories,
             difficulty=profile.desired_difficulty,
             plan=plan,
+            target_question_count=profile.question_count,
             selected_skills=plan.selected_skills,
             current_question=self._workflow.opening_message(
                 self._prompt_loader, profile.target_role
             ),
+            current_topic="自我介绍",
             system_knowledge_base_ids=profile.system_knowledge_base_ids,
             user_knowledge_base_ids=profile.user_knowledge_base_ids,
             initialization_run_id=run_id,
             initialization_fingerprint=self._profile_fingerprint(profile),
         )
+        self._register_question(session, session.current_question, InterviewStage.OPENING, "自我介绍")
         await self._memory_service.initialize_user_memory(
             user_id=user_id, profile=profile
         )
@@ -243,6 +254,10 @@ class InterviewAgentService:
             candidate_answer,
             memory_context,
         )
+        if session.current_stage == InterviewStage.OPENING:
+            await self._replan_after_opening(session, candidate_answer)
+            allowed_actions = self._allowed_actions(session)
+            next_stage = self._next_stage(session)
         route = await self._routing_agent.route(
             session,
             evaluation,
@@ -255,7 +270,10 @@ class InterviewAgentService:
                 "模型返回了不允许的流程动作", retryable=False
             )
 
+        route = self._enforce_route_limits(session, route, allowed_actions, next_stage)
+
         turn = self._record_turn(session, candidate_answer, evaluation, route, run_id)
+        self._compact_session_history(session)
         self._apply_route(session, route)
         # The evaluated turn is part of session short-term memory before evidence
         # lookup and question generation.  Long-term persistence remains after the
@@ -280,6 +298,8 @@ class InterviewAgentService:
             session.current_question = await self._question_agent.generate(
                 session, route, evidence, next_question_memory_context
             )
+            session.current_topic = route.next_topic
+            self._register_question(session, session.current_question, session.current_stage, route.next_topic)
             # 下轮评分复用这份快照，不为评分额外发起知识库检索。
             session.current_question_evidence = evidence
         session.updated_at = datetime.now(timezone.utc)
@@ -331,11 +351,90 @@ class InterviewAgentService:
 
         stage_plan = session.plan.get_stage(session.current_stage)
         actions = {InterviewAction.NEXT_STAGE, InterviewAction.END_INTERVIEW}
+        if session.total_primary_question_count >= session.target_question_count:
+            return actions
         if session.followup_count < stage_plan.max_followups_per_question:
             actions.add(InterviewAction.FOLLOW_UP)
-        if session.primary_question_count < stage_plan.max_primary_questions:
+        if (
+            session.primary_question_count < min(
+                stage_plan.max_primary_questions, MAX_PRIMARY_QUESTIONS_PER_STAGE
+            )
+        ):
             actions.add(InterviewAction.NEXT_QUESTION)
         return actions
+
+    async def _replan_after_opening(
+        self,
+        session: InterviewSession,
+        self_introduction: str,
+    ) -> None:
+        """把自我介绍中的新增事实纳入正式计划，再进入项目深挖。"""
+        # 兼容升级前已经持久化的会话：新会话一定带真实快照，旧会话缺少
+        # 这些字段时沿用原计划，绝不伪造岗位或时长。
+        if not session.resume_text or not session.target_role or session.interview_duration_minutes is None:
+            return
+        profile = CandidateProfile(
+            candidate_id=session.candidate_id,
+            resume_id=session.resume_id,
+            jd_id=session.jd_id,
+            resume_text=(
+                f"{session.resume_text}\n\n候选人自我介绍：{self_introduction.strip()}"
+            ),
+            jd_text=session.jd_text,
+            target_role=session.target_role,
+            interview_duration_minutes=session.interview_duration_minutes,
+            desired_difficulty=session.difficulty,
+            question_count=session.target_question_count,
+            requested_skill_id=session.requested_skill_id,
+            custom_categories=session.custom_categories,
+            system_knowledge_base_ids=session.system_knowledge_base_ids,
+            user_knowledge_base_ids=session.user_knowledge_base_ids,
+        )
+        session.plan = await self._planner.create_plan(profile)
+        session.selected_skills = session.plan.selected_skills
+
+    def _enforce_route_limits(
+        self,
+        session: InterviewSession,
+        route: InterviewRoute,
+        allowed_actions: set[InterviewAction],
+        next_stage: InterviewStage | None,
+    ) -> InterviewRoute:
+        """将模型的软决策收敛到题量和主题硬边界内。"""
+        if session.total_primary_question_count >= session.target_question_count:
+            return InterviewRoute(action=InterviewAction.END_INTERVIEW)
+
+        topic = (route.next_topic or session.current_topic or "").strip()
+        topic_key = self._canonical_topic_key(session, topic)
+        topic_count = session.topic_question_counts.get(topic_key, 0) if topic_key else 0
+        stage_count = session.stage_question_counts.get(session.current_stage.value, 0)
+        topic_or_stage_exhausted = (
+            (bool(topic_key) and topic_count >= MAX_QUESTIONS_PER_TOPIC)
+            or stage_count >= MAX_PRIMARY_QUESTIONS_PER_STAGE
+        )
+        if not topic_or_stage_exhausted and route.action in allowed_actions:
+            if route.action == InterviewAction.NEXT_STAGE and next_stage not in {None, InterviewStage.SUMMARY}:
+                next_topics = session.plan.get_stage(next_stage).topics
+                if next_topics and not route.next_topic:
+                    return InterviewRoute(action=route.action, next_topic=next_topics[0])
+            return route
+
+        # 达到边界时切换阶段，不让模型继续在同一个方向上出题。
+        if InterviewAction.NEXT_STAGE in allowed_actions and next_stage is not None:
+            if next_stage == InterviewStage.SUMMARY:
+                return InterviewRoute(action=InterviewAction.NEXT_STAGE)
+            next_topics = session.plan.get_stage(next_stage).topics
+            if not next_topics and not topic:
+                return InterviewRoute(action=InterviewAction.END_INTERVIEW)
+            return InterviewRoute(
+                action=InterviewAction.NEXT_STAGE,
+                next_topic=next_topics[0] if next_topics else topic,
+            )
+        if InterviewAction.NEXT_QUESTION in allowed_actions and topic:
+            return InterviewRoute(action=InterviewAction.NEXT_QUESTION, next_topic=topic)
+        if InterviewAction.FOLLOW_UP in allowed_actions and topic:
+            return InterviewRoute(action=InterviewAction.FOLLOW_UP, next_topic=topic)
+        return InterviewRoute(action=InterviewAction.END_INTERVIEW)
 
     def _next_stage(self, session: InterviewSession) -> InterviewStage | None:
         current_index = self._workflow.stages.index(session.current_stage)
@@ -364,6 +463,7 @@ class InterviewAgentService:
         turn = TurnRecord(
             run_id=run_id,
             stage=session.current_stage,
+            topic=session.current_topic,
             question=session.current_question,
             candidate_answer=candidate_answer,
             action=route.action,
@@ -375,8 +475,53 @@ class InterviewAgentService:
             preferences=evaluation.preferences,
         )
         session.turns.append(turn)
-        session.asked_question_catalog.append(turn.question)
         return turn
+
+    @staticmethod
+    def _register_question(
+        session: InterviewSession,
+        question: str,
+        stage: InterviewStage,
+        topic: str | None,
+    ) -> None:
+        normalized = " ".join(question.split()).casefold()
+        existing = {" ".join(item.split()).casefold() for item in session.asked_question_catalog}
+        if normalized not in existing:
+            session.asked_question_catalog.append(question)
+        stage_key = stage.value
+        session.stage_question_counts[stage_key] = session.stage_question_counts.get(stage_key, 0) + 1
+        if topic and topic.strip():
+            topic_key = InterviewAgentService._canonical_topic_key(session, topic)
+            session.topic_question_counts[topic_key] = session.topic_question_counts.get(topic_key, 0) + 1
+
+    @staticmethod
+    def _canonical_topic_key(session: InterviewSession, topic: str) -> str:
+        normalized = " ".join(topic.split()).casefold()
+        if not normalized:
+            return normalized
+        try:
+            candidates = session.plan.get_stage(session.current_stage).topics
+        except (LookupError, ValueError):
+            candidates = []
+        for candidate in candidates:
+            candidate_key = " ".join(candidate.split()).casefold()
+            if candidate_key and (candidate_key in normalized or normalized in candidate_key):
+                return candidate_key
+        return normalized
+
+    @staticmethod
+    def _compact_session_history(session: InterviewSession, limit: int = 5) -> None:
+        """仅把较早轮次压缩给模型，原始问答仍完整保存在会话中。"""
+        older = session.turns[:-limit]
+        if not older:
+            return
+        entries = []
+        for turn in older:
+            topic = turn.topic or turn.stage.value
+            entries.append(
+                f"{topic}: 问={turn.question}; 答={turn.answer_summary}; 分数={turn.score}"
+            )
+        session.history_summary = "\n".join(entries).strip()[-2000:]
 
     def _apply_route(
         self, session: InterviewSession, route: InterviewRoute
@@ -387,6 +532,7 @@ class InterviewAgentService:
 
         if route.action == InterviewAction.NEXT_QUESTION:
             session.primary_question_count += 1
+            session.total_primary_question_count += 1
             session.followup_count = 0
             return
 
@@ -401,6 +547,7 @@ class InterviewAgentService:
 
         session.current_stage = next_stage
         session.primary_question_count = 1
+        session.total_primary_question_count += 1
         session.followup_count = 0
 
     async def _question_evidence(self, session: InterviewSession, route: InterviewRoute) -> list[dict[str, object]]:

@@ -168,7 +168,8 @@ export default function Interview({
         restoredMessages.push({
           type: 'interviewer',
           content: q.question,
-          category: q.category,
+          // 历史消息不重复展示阶段标签，页面只突出当前阶段。
+          category: i === idx ? q.category : undefined,
           questionIndex: i
         });
         if (q.userAnswer) {

@@ -34,6 +34,13 @@ class MemoryService:
                 resume_snapshots=[to_resume_memory(profile)],
             ))
         expected_version = existing.state_version
+        # 简历是用户画像的版本源。切换到新简历时，不能继续沿用旧简历提取的
+        # 技术栈、深度和偏好，否则后续面试会把旧画像当成当前候选人事实。
+        if existing.active_resume_id != profile.resume_id:
+            existing.technical_stack = []
+            existing.technical_depth = []
+            existing.preferences = []
+            existing.notes = []
         existing.active_resume_id = profile.resume_id
         existing.resume_snapshots = self._merge_resume_snapshot(existing.resume_snapshots, to_resume_memory(profile))
         existing.updated_at = datetime.now(timezone.utc)
@@ -93,11 +100,15 @@ class MemoryService:
         memory = await self._repository.get(session.user_id)
         if memory is None:
             return MemoryContext.empty(session).model_copy(
-                update={"recent_turns": session.turns[-self._policy.short_term_turn_limit :]}
+                update={
+                    "recent_turns": session.turns[-self._policy.short_term_turn_limit :],
+                    "conversation_summary": getattr(session, "history_summary", ""),
+                }
             )
         active_resume = next((item for item in memory.resume_snapshots if item.resume_id == session.resume_id), None)
         return MemoryContext(
             recent_turns=session.turns[-self._policy.short_term_turn_limit :],
+            conversation_summary=getattr(session, "history_summary", ""),
             historical_summary=memory.historical_summary,
             active_resume=active_resume,
             technical_stack=memory.technical_stack,
@@ -115,7 +126,8 @@ class MemoryService:
         if turn.turn_id in memory.recorded_turn_ids:
             return memory
         expected_version = memory.state_version
-        event = f"[{session.session_id}/{turn.stage}] score={turn.score}; {turn.evaluation_summary}"
+        topic = turn.topic or turn.stage.value
+        event = f"[{session.session_id}/{turn.stage}/{topic}] score={turn.score}; {turn.evaluation_summary}"
         memory.historical_summary = self._append_summary(memory.historical_summary, event)
         memory.question_catalog = self._merge_items(memory.question_catalog, [turn.question], limit=100)
         memory.weak_topics = self._merge_items(memory.weak_topics, turn.weaknesses, limit=30)
@@ -203,10 +215,12 @@ class MemoryService:
                 analysis_suggestions=suggestions[:20],
             ))
         memory.resume_snapshots = snapshots[: self._policy.max_resume_snapshots]
-        memory.technical_stack = self._merge_items(memory.technical_stack, technical_stack, limit=30)
-        memory.technical_depth = self._merge_items(memory.technical_depth, technical_depth, limit=30)
-        memory.notes = self._merge_items(memory.notes, suggestions, limit=30)
-        memory.preferences = self._merge_items(memory.preferences, career_preferences, limit=30)
+        # 同一简历重复评估时使用替换语义，避免旧版本分析结果不断累积；
+        # activate_resume 已经保证了旧简历不会覆盖当前版本。
+        memory.technical_stack = self._unique_items(technical_stack, limit=30)
+        memory.technical_depth = self._unique_items(technical_depth, limit=30)
+        memory.notes = self._unique_items(suggestions, limit=30)
+        memory.preferences = self._unique_items(career_preferences, limit=30)
         if run_id and evaluation_fingerprint and evaluation is not None:
             memory.resume_evaluation_runs[run_id] = ResumeEvaluationRun(
                 run_id=run_id,
@@ -256,3 +270,8 @@ class MemoryService:
     def _merge_items(current: list[str], incoming: list[str], *, limit: int) -> list[str]:
         merged = [item.strip() for item in [*current, *incoming] if item and item.strip()]
         return list(dict.fromkeys(merged))[-limit:]
+
+    @staticmethod
+    def _unique_items(items: list[str], *, limit: int) -> list[str]:
+        values = [item.strip() for item in items if item and item.strip()]
+        return list(dict.fromkeys(values))[:limit]

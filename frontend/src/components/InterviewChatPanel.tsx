@@ -40,7 +40,8 @@ export default function InterviewChatPanel({
 
   const progress = useMemo(() => {
     if (!session || !currentQuestion) return 0;
-    return ((currentQuestion.questionIndex + 1) / session.totalQuestions) * 100;
+    const answered = session.questions.filter(question => question.userAnswer !== null).length;
+    return Math.min(100, ((answered + 1) / session.totalQuestions) * 100);
   }, [session, currentQuestion]);
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -56,10 +57,10 @@ export default function InterviewChatPanel({
             className="bg-white dark:bg-slate-800 rounded-2xl p-6 mb-4 shadow-sm dark:shadow-slate-900/50 border border-slate-100 dark:border-slate-700">
         <div className="flex items-center justify-between mb-3">
           <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-            题目 {currentQuestion ? currentQuestion.questionIndex + 1 : 0} / {session.totalQuestions}
+            当前阶段：{session.currentStage || currentQuestion?.category || '面试'}
           </span>
             <span className="text-sm text-slate-500 dark:text-slate-400">
-            {Math.round(progress)}%
+            已完成 {session.questions.filter(question => question.userAnswer !== null).length} / {session.totalQuestions} 个主问题
           </span>
         </div>
             <div className="h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">

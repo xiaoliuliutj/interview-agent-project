@@ -67,11 +67,12 @@ public class InterviewController {
     }
 
     @PostMapping("/{sessionId}/answers")
-    public ApiResult<InterviewView> submitAnswer(@PathVariable String sessionId,
+    public ApiResult<InterviewDetailView> submitAnswer(@PathVariable String sessionId,
                                                    @Valid @RequestBody SubmitInterviewAnswerRequest request,
                                                    @RequestHeader(value = "X-User-Id", required = false) String userId) {
         String owner = identity.require(userId);
-        return ApiResult.success(interviewService.submitAnswer(sessionId, owner, request.answer(), request.runId()));
+        interviewService.submitAnswer(sessionId, owner, request.answer(), request.runId());
+        return ApiResult.success(detail(sessionId, owner));
     }
 
     @PostMapping("/{sessionId}/complete")

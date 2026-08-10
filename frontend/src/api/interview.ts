@@ -67,11 +67,11 @@ export const interviewApi = {
   },
 
   async submitAnswer(input: SubmitAnswerRequest): Promise<SubmitAnswerResponse> {
-    const view = await request.post<InterviewView>(`/api/interviews/${input.sessionId}/answers`, {
+    const detail = await request.post<InterviewDetailView>(`/api/interviews/${input.sessionId}/answers`, {
       answer: input.answer,
       runId: input.runId,
     }, { timeout: 180000 });
-    const session = toSession(view);
+    const session = toSession(detail.session, detail.turns);
     const nextQuestion = session.status === 'ACTIVE' && session.questions.length > 0
       ? session.questions[session.questions.length - 1] : null;
     return { session, hasNextQuestion: nextQuestion !== null, nextQuestion };
