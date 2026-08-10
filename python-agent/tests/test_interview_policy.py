@@ -60,3 +60,22 @@ def test_topic_limit_forces_stage_change() -> None:
         InterviewStage.FUNDAMENTAL,
     )
     assert route.action == InterviewAction.NEXT_STAGE
+
+
+def test_total_question_budget_includes_followups_and_hard_stops_at_twenty() -> None:
+    repository, events = InMemorySessionRepository(), []
+    service, _, _, _ = build_service(repository, [], [], events)
+    session = SimpleNamespace(
+        current_stage=InterviewStage.PROJECT,
+        current_topic="项目",
+        topic_question_counts={},
+        stage_question_counts={"PROJECT": 1},
+        total_question_count=20,
+        total_primary_question_count=8,
+        target_question_count=20,
+        primary_question_count=1,
+        followup_count=0,
+        plan=build_plan(),
+    )
+    actions = service._allowed_actions(session, evaluation(20, "回答明显不足"))
+    assert actions == {InterviewAction.NEXT_STAGE, InterviewAction.END_INTERVIEW}

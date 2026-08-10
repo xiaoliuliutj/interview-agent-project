@@ -7,11 +7,13 @@ import com.interview.agent.upper.domain.InterviewTurnEntity;
 import com.interview.agent.upper.repository.InterviewSessionRepository;
 import com.interview.agent.upper.repository.InterviewTurnRepository;
 import jakarta.transaction.Transactional;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.Map;
 
 @Service
 public class InterviewSessionPersistenceService {
@@ -20,6 +22,7 @@ public class InterviewSessionPersistenceService {
 
     private final InterviewSessionRepository sessionRepository;
     private final InterviewTurnRepository turnRepository;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public InterviewSessionPersistenceService(
             InterviewSessionRepository sessionRepository,
@@ -39,6 +42,11 @@ public class InterviewSessionPersistenceService {
     public void activate(String sessionId, AgentResponse response) {
         InterviewSessionEntity session = requiredForUpdate(sessionId);
         session.applyAgentResponse(response.answer(), response.sessionStatus(), response.stateVersion(), response.currentStage());
+        if (response.output() != null) {
+            session.applyCounters(number(response.output().get("totalQuestionCount")),
+                    number(response.output().get("currentPrimaryQuestionCount")),
+                    number(response.output().get("currentFollowupCount")));
+        }
         sessionRepository.save(session);
     }
 
@@ -83,9 +91,39 @@ public class InterviewSessionPersistenceService {
         InterviewTurnEntity turn = new InterviewTurnEntity(
                 sessionId, runId, session.getCurrentQuestion(), candidateAnswer);
         turn.setStage(turnStage);
+        Map<String, Object> output = response.output();
+        if (output != null) {
+            Object summary = output.get("evaluationSummary");
+            if (summary instanceof String value) turn.setEvaluationSummary(value);
+            Object score = output.get("evaluationScore");
+            if (score instanceof Number value) turn.setScore(value.intValue());
+            try {
+                if (output.get("strengths") != null) turn.setStrengthsJson(objectMapper.writeValueAsString(output.get("strengths")));
+                if (output.get("weaknesses") != null) turn.setWeaknessesJson(objectMapper.writeValueAsString(output.get("weaknesses")));
+                if (output.get("finalEvaluation") != null) session.setFinalEvaluationJson(objectMapper.writeValueAsString(output.get("finalEvaluation")));
+            } catch (Exception ignored) {
+                // Candidate-visible fields remain available even if optional report JSON cannot be serialized.
+            }
+            session.applyCounters(number(output.get("totalQuestionCount")),
+                    number(output.get("currentPrimaryQuestionCount")),
+                    number(output.get("currentFollowupCount")));
+        }
         turnRepository.save(turn);
         session.applyAgentResponse(response.answer(), response.sessionStatus(), response.stateVersion(), response.currentStage());
         sessionRepository.save(session);
+    }
+
+    private static Integer number(Object value) {
+        return value instanceof Number number ? number.intValue() : null;
+    }
+
+    private void storeFinalEvaluation(InterviewSessionEntity session, Map<String, Object> output) {
+        if (output == null || output.get("finalEvaluation") == null) return;
+        try {
+            session.setFinalEvaluationJson(objectMapper.writeValueAsString(output.get("finalEvaluation")));
+        } catch (Exception ignored) {
+            // Keep the completed session valid even if optional report JSON is malformed.
+        }
     }
 
     @Transactional
@@ -100,6 +138,7 @@ public class InterviewSessionPersistenceService {
         InterviewSessionEntity session = requiredForUpdate(sessionId);
         assertOwner(session, userId);
         session.applyAgentResponse(response.answer(), response.sessionStatus(), response.stateVersion(), response.currentStage());
+        storeFinalEvaluation(session, response.output());
         session.complete();
         sessionRepository.save(session);
     }

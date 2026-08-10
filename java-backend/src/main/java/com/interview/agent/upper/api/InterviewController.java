@@ -94,7 +94,7 @@ public class InterviewController {
                                          @RequestHeader(value = "X-User-Id", required = false) String userId) {
         InterviewDetailView detail = detail(sessionId, identity.require(userId));
         byte[] content = reportPdfService.render(sessionId, detail.session().status(),
-                detail.session().totalQuestions(), detail.turns());
+                detail.session().totalQuestions(), detail.turns(), detail.session().finalEvaluation());
         return ResponseEntity.ok().contentType(MediaType.APPLICATION_PDF)
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"interview-" + sessionId + ".pdf\"")
                 .body(content);
@@ -117,7 +117,8 @@ public class InterviewController {
                 .mapToObj(index -> {
                     InterviewTurnEntity turn = turns.get(index);
                     return new InterviewTurnView(index, turn.getStage(), turn.getQuestion(),
-                            turn.getCandidateAnswer(), turn.getCreatedAt());
+                            turn.getCandidateAnswer(), turn.getEvaluationSummary(),
+                            turn.getScore(), turn.getCreatedAt());
                 }).toList();
         return new InterviewDetailView(session, visibleTurns);
     }

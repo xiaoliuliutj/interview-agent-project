@@ -89,3 +89,13 @@ sh scripts/start.sh
 ## 5. 部署边界
 
 此部署面向单台虚拟机演示和开发验收。它不包含 HTTPS 证书、外部对象存储、数据库备份、监控告警或多副本高可用；这些属于后续生产化演进，而非本项目一期范围。
+# 面试报告字段升级
+
+已有 PostgreSQL 数据卷不会再次自动执行 `postgres/init` 中的新脚本。升级到包含 `003-interview-report-upgrade.sql` 的版本后，在 `infrastructure` 目录执行一次：
+
+```bash
+docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < postgres/init/003-interview-report-upgrade.sql
+```
+
+随后重新构建并启动 Java、Python 和前端服务。新建数据库会在初始化时自动执行该脚本。

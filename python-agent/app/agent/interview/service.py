@@ -31,6 +31,9 @@ from .models import (
     TurnRecord,
     MAX_QUESTIONS_PER_TOPIC,
     MAX_PRIMARY_QUESTIONS_PER_STAGE,
+    MAX_TOTAL_QUESTIONS,
+    MAX_FOLLOWUPS_PER_PRIMARY,
+    ALGORITHM_SEVERE_SCORE_THRESHOLD,
 )
 from .repository import InterviewSessionRepository
 from .workflow import InterviewWorkflow
@@ -113,7 +116,7 @@ class InterviewAgentService:
             custom_categories=profile.custom_categories,
             difficulty=profile.desired_difficulty,
             plan=plan,
-            target_question_count=profile.question_count,
+            target_question_count=min(profile.question_count, MAX_TOTAL_QUESTIONS),
             selected_skills=plan.selected_skills,
             current_question=self._workflow.opening_message(
                 self._prompt_loader, profile.target_role
@@ -164,6 +167,8 @@ class InterviewAgentService:
             except Exception as error:
                 # 总结不影响已完成会话的可恢复性，但必须保留可观测日志。
                 logger.warning("面试会话总结生成失败: session_id=%s", session_id, exc_info=error)
+        session.final_evaluation = session.final_evaluation or self._fallback_evaluation(session)
+        session.final_summary = session.final_evaluation.summary
         session.updated_at = datetime.now(timezone.utc)
         saved = await self._repository.save(session, expected_version=expected_version)
         await self._memory_service.finalize_session(session=saved, interrupted=False)
@@ -247,8 +252,6 @@ class InterviewAgentService:
 
         expected_version = session.state_version
         memory_context = await self._memory_service.build_context(session)
-        allowed_actions = self._allowed_actions(session)
-        next_stage = self._next_stage(session)
         evaluation = await self._evaluation_agent.evaluate(
             session,
             candidate_answer,
@@ -256,8 +259,8 @@ class InterviewAgentService:
         )
         if session.current_stage == InterviewStage.OPENING:
             await self._replan_after_opening(session, candidate_answer)
-            allowed_actions = self._allowed_actions(session)
-            next_stage = self._next_stage(session)
+        allowed_actions = self._allowed_actions(session, evaluation)
+        next_stage = self._next_stage(session)
         route = await self._routing_agent.route(
             session,
             evaluation,
@@ -265,12 +268,7 @@ class InterviewAgentService:
             next_stage.value if next_stage else None,
             memory_context,
         )
-        if route.action not in allowed_actions:
-            raise AgentDependencyError(
-                "模型返回了不允许的流程动作", retryable=False
-            )
-
-        route = self._enforce_route_limits(session, route, allowed_actions, next_stage)
+        route = self._enforce_route_limits(session, route, allowed_actions, next_stage, evaluation)
 
         turn = self._record_turn(session, candidate_answer, evaluation, route, run_id)
         self._compact_session_history(session)
@@ -288,6 +286,8 @@ class InterviewAgentService:
                     session.final_summary = session.final_evaluation.summary
                 except Exception as error:
                     logger.warning("面试会话总结生成失败: session_id=%s", session_id, exc_info=error)
+            session.final_evaluation = session.final_evaluation or self._fallback_evaluation(session)
+            session.final_summary = session.final_evaluation.summary
             session.current_question = session.final_summary
         elif session.status != SessionStatus.COMPLETED:
             if route.next_topic is None or not route.next_topic.strip():
@@ -299,7 +299,10 @@ class InterviewAgentService:
                 session, route, evidence, next_question_memory_context
             )
             session.current_topic = route.next_topic
-            self._register_question(session, session.current_question, session.current_stage, route.next_topic)
+            self._register_question(
+                session, session.current_question, session.current_stage, route.next_topic,
+                is_followup=route.action == InterviewAction.FOLLOW_UP,
+            )
             # 下轮评分复用这份快照，不为评分额外发起知识库检索。
             session.current_question_evidence = evidence
         session.updated_at = datetime.now(timezone.utc)
@@ -310,7 +313,7 @@ class InterviewAgentService:
             state_version=expected_version + 1,
             turn_stage=turn.stage,
             current_stage=session.current_stage,
-            output=None,
+            output=self._candidate_visible_output(session, turn),
         )
         if run_id:
             session.run_snapshots[run_id] = snapshot
@@ -345,16 +348,36 @@ class InterviewAgentService:
                 "上层与下层 Agent 会话状态不一致，请先恢复最新会话状态"
             )
 
-    def _allowed_actions(self, session: InterviewSession) -> set[InterviewAction]:
+    def _allowed_actions(
+        self, session: InterviewSession, evaluation: InterviewEvaluation | None = None
+    ) -> set[InterviewAction]:
         if session.current_stage == InterviewStage.OPENING:
             return {InterviewAction.NEXT_STAGE}
 
         stage_plan = session.plan.get_stage(session.current_stage)
         actions = {InterviewAction.NEXT_STAGE, InterviewAction.END_INTERVIEW}
-        if session.total_primary_question_count >= session.target_question_count:
+        total_question_count = getattr(
+            session, "total_question_count", getattr(session, "total_primary_question_count", 0)
+        )
+        if total_question_count >= min(session.target_question_count, MAX_TOTAL_QUESTIONS):
             return actions
-        if session.followup_count < stage_plan.max_followups_per_question:
+        answer_needs_followup = evaluation is not None and (
+            evaluation.score <= 60 or bool(evaluation.weaknesses)
+        )
+        if (
+            answer_needs_followup
+            and session.followup_count < min(stage_plan.max_followups_per_question, MAX_FOLLOWUPS_PER_PRIMARY)
+        ):
             actions.add(InterviewAction.FOLLOW_UP)
+        if session.current_stage == InterviewStage.CODING:
+            # 算法第二题不是普通的阶段扩展：只有第一题严重不足才允许出题。
+            if (
+                session.primary_question_count < 2
+                and evaluation is not None
+                and evaluation.score < ALGORITHM_SEVERE_SCORE_THRESHOLD
+            ):
+                actions.add(InterviewAction.NEXT_QUESTION)
+            return actions
         if (
             session.primary_question_count < min(
                 stage_plan.max_primary_questions, MAX_PRIMARY_QUESTIONS_PER_STAGE
@@ -399,18 +422,46 @@ class InterviewAgentService:
         route: InterviewRoute,
         allowed_actions: set[InterviewAction],
         next_stage: InterviewStage | None,
+        evaluation: InterviewEvaluation | None = None,
     ) -> InterviewRoute:
         """将模型的软决策收敛到题量和主题硬边界内。"""
-        if session.total_primary_question_count >= session.target_question_count:
+        total_question_count = getattr(
+            session, "total_question_count", getattr(session, "total_primary_question_count", 0)
+        )
+        if total_question_count >= min(session.target_question_count, MAX_TOTAL_QUESTIONS):
             return InterviewRoute(action=InterviewAction.END_INTERVIEW)
+
+        if route.action not in allowed_actions:
+            fallback_topic = (route.next_topic or session.current_topic or "").strip() or None
+            if InterviewAction.NEXT_QUESTION in allowed_actions and fallback_topic:
+                return InterviewRoute(action=InterviewAction.NEXT_QUESTION, next_topic=fallback_topic)
+            if InterviewAction.NEXT_STAGE in allowed_actions:
+                if next_stage is not None and next_stage != InterviewStage.SUMMARY:
+                    next_topics = session.plan.get_stage(next_stage).topics
+                    fallback_topic = next_topics[0] if next_topics else fallback_topic
+                return InterviewRoute(action=InterviewAction.NEXT_STAGE, next_topic=fallback_topic)
+            return InterviewRoute(action=InterviewAction.END_INTERVIEW)
+
+        if route.action == InterviewAction.FOLLOW_UP and evaluation is not None and (
+            evaluation.score > 60 and not evaluation.weaknesses
+        ):
+            return InterviewRoute(action=InterviewAction.NEXT_STAGE)
+
+        if route.action == InterviewAction.FOLLOW_UP:
+            # 追问必须围绕同一个主问题，不能借 FOLLOW_UP 偷换新的主题。
+            route = InterviewRoute(
+                action=InterviewAction.FOLLOW_UP,
+                next_topic=session.current_topic or route.next_topic,
+            )
 
         topic = (route.next_topic or session.current_topic or "").strip()
         topic_key = self._canonical_topic_key(session, topic)
         topic_count = session.topic_question_counts.get(topic_key, 0) if topic_key else 0
         stage_count = session.stage_question_counts.get(session.current_stage.value, 0)
+        stage_limit = 2 if session.current_stage == InterviewStage.CODING else MAX_PRIMARY_QUESTIONS_PER_STAGE
         topic_or_stage_exhausted = (
             (bool(topic_key) and topic_count >= MAX_QUESTIONS_PER_TOPIC)
-            or stage_count >= MAX_PRIMARY_QUESTIONS_PER_STAGE
+            or stage_count >= stage_limit
         )
         if not topic_or_stage_exhausted and route.action in allowed_actions:
             if route.action == InterviewAction.NEXT_STAGE and next_stage not in {None, InterviewStage.SUMMARY}:
@@ -483,13 +534,16 @@ class InterviewAgentService:
         question: str,
         stage: InterviewStage,
         topic: str | None,
+        *,
+        is_followup: bool = False,
     ) -> None:
         normalized = " ".join(question.split()).casefold()
         existing = {" ".join(item.split()).casefold() for item in session.asked_question_catalog}
         if normalized not in existing:
             session.asked_question_catalog.append(question)
         stage_key = stage.value
-        session.stage_question_counts[stage_key] = session.stage_question_counts.get(stage_key, 0) + 1
+        if not is_followup:
+            session.stage_question_counts[stage_key] = session.stage_question_counts.get(stage_key, 0) + 1
         if topic and topic.strip():
             topic_key = InterviewAgentService._canonical_topic_key(session, topic)
             session.topic_question_counts[topic_key] = session.topic_question_counts.get(topic_key, 0) + 1
@@ -528,11 +582,13 @@ class InterviewAgentService:
     ) -> None:
         if route.action == InterviewAction.FOLLOW_UP:
             session.followup_count += 1
+            session.total_question_count += 1
             return
 
         if route.action == InterviewAction.NEXT_QUESTION:
             session.primary_question_count += 1
             session.total_primary_question_count += 1
+            session.total_question_count += 1
             session.followup_count = 0
             return
 
@@ -548,6 +604,7 @@ class InterviewAgentService:
         session.current_stage = next_stage
         session.primary_question_count = 1
         session.total_primary_question_count += 1
+        session.total_question_count += 1
         session.followup_count = 0
 
     async def _question_evidence(self, session: InterviewSession, route: InterviewRoute) -> list[dict[str, object]]:
@@ -599,8 +656,56 @@ class InterviewAgentService:
         session.current_question_evidence = []
 
     @staticmethod
+    def _candidate_visible_output(
+        session: InterviewSession, turn: TurnRecord
+    ) -> dict[str, object]:
+        """Only return information that a candidate is meant to see.
+
+        Internal memory, RAG evidence and routing rationales remain in the lower
+        layer.  The upper layer receives a compact assessment and display counts.
+        """
+        output: dict[str, object] = {
+            "evaluationSummary": turn.evaluation_summary,
+            "evaluationScore": turn.score,
+            "currentPrimaryQuestionCount": session.primary_question_count,
+            "currentFollowupCount": session.followup_count,
+            "totalQuestionCount": session.total_question_count,
+            "questionBudget": session.target_question_count,
+        }
+        if session.final_evaluation is not None:
+            output["finalEvaluation"] = session.final_evaluation.model_dump(by_alias=True)
+        elif session.status == SessionStatus.COMPLETED:
+            output["finalEvaluation"] = InterviewAgentService._fallback_evaluation(session).model_dump(by_alias=True)
+        return output
+
+    @staticmethod
     def _fallback_summary(session: InterviewSession, *, interrupted: bool) -> str:
         turn_count = len(session.turns)
         if interrupted:
             return f"本次面试在完成前中断，已保存 {turn_count} 轮问答记录，可在恢复后继续。"
         return f"本次面试已完成，共保存 {turn_count} 轮问答记录。"
+
+    @staticmethod
+    def _fallback_evaluation(session: InterviewSession) -> "InterviewSummary":
+        """Produce a usable report even when the final LLM call is unavailable."""
+        from .models import InterviewSummary
+
+        if not session.turns:
+            return InterviewSummary(
+                overallScore=0, summary="本次面试没有有效作答，暂时无法形成能力评估。",
+                strengths=[], weaknesses=["缺少有效的面试回答"], suggestions=["完成一次完整面试后再查看评估。"],
+            )
+        average = round(sum(turn.score for turn in session.turns) / len(session.turns))
+        strengths = [item for turn in session.turns for item in turn.strengths][:5]
+        weaknesses = [item for turn in session.turns for item in turn.weaknesses][:5]
+        if not strengths:
+            strengths = ["能够完成本次面试的主要问答"]
+        if not weaknesses:
+            weaknesses = ["建议继续补充回答中的技术原理和落地细节"]
+        return InterviewSummary(
+            overallScore=average,
+            summary=f"本次面试共完成 {len(session.turns)} 轮问答，综合表现评分为 {average} 分。",
+            strengths=strengths,
+            weaknesses=weaknesses,
+            suggestions=["结合每轮评估摘要，针对薄弱点补充原理、边界和实践案例。"],
+        )

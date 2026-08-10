@@ -21,3 +21,10 @@
 ## 部署与验证
 
 `infrastructure/docker-compose.yml` 提供完整虚拟机部署。Python 测试使用 `D:\Anaconda\envs\inter-guide\python.exe -m pytest tests -q -p no:cacheprovider`；Java 和容器集成测试在虚拟机执行。
+## 本轮面试流程与报告改造
+
+- 已实现六阶段硬边界：总题量最多 20（含追问）；项目、基础、场景各最多 4 个主问题、每题最多 2 次追问；算法最多 2 题且第二题要求首题评分低于 40 分。
+- 已实现先评估再路由，回答较好时不会自动追问；评估摘要、题目计数和下一题通过上层返回前端。
+- 已实现每轮问答记录、最终综合评估、前端评估页和评估 PDF；数据库字段迁移位于 `infrastructure/postgres/init/003-interview-report-upgrade.sql`。
+- PDF 支持挂载字体和 Docker 内 `fonts-noto-cjk` 的 TTC 字体；已有数据库卷升级后需手动执行迁移脚本。
+- Python 测试已通过 52 项，前端 TypeScript 检查已通过；Java 容器构建需在虚拟机执行。

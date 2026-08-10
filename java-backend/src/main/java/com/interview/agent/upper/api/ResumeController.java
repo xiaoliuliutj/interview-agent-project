@@ -312,6 +312,8 @@ public class ResumeController {
                 session.getId(), session.getUserId(), session.getCandidateId(), session.getResumeId(),
                 session.getJdId(), session.getSkillId(), session.getDifficulty(),
                 session.getTotalQuestions(), session.getStatus().name(), session.getAgentStateVersion(),
-                session.getCurrentQuestion(), session.getCurrentStage(), session.getCreatedAt(), session.getUpdatedAt());
+                session.getCurrentQuestion(), session.getCurrentStage(), session.getIssuedQuestionCount(),
+                session.getPrimaryQuestionCount(), session.getFollowupCount(), java.util.Map.of(),
+                session.getCreatedAt(), session.getUpdatedAt());
     }
 }

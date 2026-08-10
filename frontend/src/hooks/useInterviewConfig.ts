@@ -23,7 +23,7 @@ export function useInterviewConfig(options?: { defaultResumeId?: string; autoLoa
   const [showMore, setShowMore] = useState(false);
   const [resumeId, setResumeId] = useState<string | undefined>(defaultResumeId);
   const [resumes, setResumes] = useState<ResumeListItem[]>([]);
-  const [questionCount, setQuestionCount] = useState(6);
+  const [questionCount, setQuestionCount] = useState(20);
   const [plannedDuration, setPlannedDuration] = useState(30);
   const [targetRole, setTargetRole] = useState('');
   const [customJdText, setCustomJdText] = useState('');

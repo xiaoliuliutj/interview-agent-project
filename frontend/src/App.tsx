@@ -131,11 +131,6 @@ function InterviewWrapper() {
     navigate('/history', { replace: false });
   };
 
-  const handleInterviewComplete = () => {
-    // 面试完成后跳转到面试记录页
-    navigate('/interviews');
-  };
-
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -154,7 +149,6 @@ function InterviewWrapper() {
       sessionIdToResume={entryState.sessionIdToResume}
       initialConfig={entryState.interviewConfig}
       onBack={handleBack}
-      onInterviewComplete={handleInterviewComplete}
     />
   );
 }

@@ -219,7 +219,7 @@ async def test_follow_up_is_routed_after_evaluation() -> None:
 
     assert updated.current_stage == InterviewStage.PROJECT
     assert updated.followup_count == 1
-    assert updated.current_question == "缓存一致性细节 的具体问题"
+    assert updated.current_question == "项目架构 的具体问题"
 
 
 @pytest.mark.asyncio
@@ -248,6 +248,8 @@ async def test_end_route_does_not_require_a_fake_next_topic() -> None:
 
     assert updated.status == "COMPLETED"
     assert "2" in updated.current_question
+    assert updated.final_evaluation is not None
+    assert 0 <= updated.final_evaluation.overall_score <= 100
     assert events == ["evaluate", "route", "question", "evaluate", "route"]
 
 

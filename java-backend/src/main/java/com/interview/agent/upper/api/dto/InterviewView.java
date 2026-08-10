@@ -1,6 +1,7 @@
 package com.interview.agent.upper.api.dto;
 
 import java.time.Instant;
+import java.util.Map;
 
 public record InterviewView(
         String sessionId,
@@ -15,6 +16,10 @@ public record InterviewView(
         long stateVersion,
         String currentQuestion,
         String currentStage,
+        int issuedQuestionCount,
+        int primaryQuestionCount,
+        int followupCount,
+        Map<String, Object> finalEvaluation,
         Instant createdAt,
         Instant updatedAt) {
 }

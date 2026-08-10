@@ -43,6 +43,16 @@ export interface InterviewItem {
   stateVersion: number;
   currentQuestion: string | null;
   currentStage: string | null;
+  issuedQuestionCount: number;
+  primaryQuestionCount: number;
+  followupCount: number;
+  finalEvaluation: {
+    overallScore?: number;
+    summary?: string;
+    strengths?: string[];
+    weaknesses?: string[];
+    suggestions?: string[];
+  };
   createdAt: string;
   updatedAt: string;
 }
@@ -53,6 +63,8 @@ export interface InterviewTurn {
   question: string;
   answer: string | null;
   answeredAt: string | null;
+  evaluationSummary: string | null;
+  score: number | null;
 }
 
 export interface InterviewDetail { session: InterviewItem; turns: InterviewTurn[]; }

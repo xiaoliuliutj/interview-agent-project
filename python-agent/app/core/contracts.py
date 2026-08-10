@@ -74,7 +74,7 @@ class CandidateSnapshot(BaseModel):
     target_role: str = Field(alias="targetRole", min_length=1)
     interview_duration_minutes: int = Field(alias="interviewDurationMinutes", ge=15, le=120)
     desired_difficulty: Literal["EASY", "MEDIUM", "HARD"] = Field(alias="desiredDifficulty")
-    question_count: int = Field(alias="questionCount", ge=2, le=30)
+    question_count: int = Field(alias="questionCount", ge=2, le=20)
     requested_skill_id: str | None = Field(default=None, alias="requestedSkillId")
     custom_categories: list[dict[str, Any]] = Field(alias="customCategories")
     system_knowledge_base_ids: list[str] = Field(alias="systemKnowledgeBaseIds")

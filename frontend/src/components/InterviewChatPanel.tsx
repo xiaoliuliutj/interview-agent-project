@@ -39,10 +39,9 @@ export default function InterviewChatPanel({
   const virtuosoRef = useRef<VirtuosoHandle>(null);
 
   const progress = useMemo(() => {
-    if (!session || !currentQuestion) return 0;
-    const answered = session.questions.filter(question => question.userAnswer !== null).length;
-    return Math.min(100, ((answered + 1) / session.totalQuestions) * 100);
-  }, [session, currentQuestion]);
+    if (!session) return 0;
+    return Math.min(100, (session.issuedQuestionCount / session.totalQuestions) * 100);
+  }, [session]);
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -55,13 +54,15 @@ export default function InterviewChatPanel({
       {/* 进度条 */}
         <div
             className="bg-white dark:bg-slate-800 rounded-2xl p-6 mb-4 shadow-sm dark:shadow-slate-900/50 border border-slate-100 dark:border-slate-700">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
           <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">
             当前阶段：{session.currentStage || currentQuestion?.category || '面试'}
           </span>
-            <span className="text-sm text-slate-500 dark:text-slate-400">
-            已完成 {session.questions.filter(question => question.userAnswer !== null).length} / {session.totalQuestions} 个主问题
-          </span>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-500 dark:text-slate-400">
+              <span>主问题：{session.primaryQuestionCount}</span>
+              <span>当前追问：{session.followupCount}</span>
+              <span>总问题：{session.issuedQuestionCount} / {session.totalQuestions}</span>
+            </div>
         </div>
             <div className="h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
           <motion.div

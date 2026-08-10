@@ -7,6 +7,7 @@ import InterviewPageHeader from '../components/InterviewPageHeader';
 import type {InterviewQuestion, InterviewSession} from '../types/interview';
 import type {Difficulty} from '../components/UnifiedInterviewModal';
 import type {CategoryDTO} from '../api/skill';
+import {historyApi} from '../api/history';
 
 interface Message {
   type: 'interviewer' | 'user';
@@ -56,7 +57,6 @@ interface InterviewProps {
     interviewDurationMinutes?: number;
   };
   onBack: () => void;
-  onInterviewComplete: () => void;
 }
 
 export default function Interview({
@@ -65,7 +65,6 @@ export default function Interview({
   sessionIdToResume,
   initialConfig,
   onBack,
-  onInterviewComplete,
 }: InterviewProps) {
   const [session, setSession] = useState<InterviewSession | null>(null);
   const [currentQuestion, setCurrentQuestion] = useState<InterviewQuestion | null>(null);
@@ -152,18 +151,21 @@ export default function Interview({
     setSession(s);
 
     if (s.questions.length > 0) {
-      const idx = Math.min(s.currentQuestionIndex, s.questions.length - 1);
-      const currentQ = s.questions[idx];
+      const activeQuestions = s.status === 'ACTIVE' || s.status === 'PAUSED'
+        ? s.questions.filter(question => question.userAnswer === null)
+        : [];
+      const currentQ = activeQuestions.length > 0 ? activeQuestions[activeQuestions.length - 1] : null;
+      const idx = currentQ ? s.questions.findIndex(question => question.questionIndex === currentQ.questionIndex) : -1;
       setCurrentQuestion(currentQ);
       const pending = loadPendingAnswerSubmission(s.sessionId);
-      if (pending && pending.question === currentQ.question && currentQ.userAnswer === null) {
+      if (pending && currentQ && pending.question === currentQ.question && currentQ.userAnswer === null) {
         pendingAnswerSubmissionRef.current = pending;
         setAnswer(pending.answer);
       }
 
       // 重建消息历史
       const restoredMessages: Message[] = [];
-      for (let i = 0; i <= idx; i++) {
+      for (let i = 0; i < s.questions.length; i++) {
         const q = s.questions[i];
         restoredMessages.push({
           type: 'interviewer',
@@ -177,9 +179,19 @@ export default function Interview({
             type: 'user',
             content: q.userAnswer
           });
+          if (q.evaluationSummary) {
+            restoredMessages.push({
+              type: 'interviewer',
+              content: `回答评估：${q.evaluationSummary}`,
+              category: q.category,
+            });
+          }
         }
       }
       setMessages(restoredMessages);
+    } else {
+      setCurrentQuestion(null);
+      setMessages([]);
     }
   };
 
@@ -226,18 +238,7 @@ export default function Interview({
       sessionStorage.removeItem(pendingAnswerStorageKey(session.sessionId));
       setAnswer('');
 
-      if (response.hasNextQuestion && response.nextQuestion) {
-        setSession(response.session);
-        setCurrentQuestion(response.nextQuestion);
-        setMessages(prev => [...prev, {
-          type: 'interviewer',
-          content: response.nextQuestion!.question,
-          category: response.nextQuestion!.category,
-          questionIndex: response.nextQuestion!.questionIndex
-        }]);
-      } else {
-        onInterviewComplete();
-      }
+      initSession(response.session);
     } catch (err) {
       setError('提交答案失败，请重试');
       console.error(err);
@@ -253,7 +254,8 @@ export default function Interview({
     try {
       await interviewApi.completeInterview(session.sessionId);
       setShowCompleteConfirm(false);
-      onInterviewComplete();
+      const completed = await interviewApi.getSession(session.sessionId);
+      initSession(completed);
     } catch (err) {
       setError('提前交卷失败，请重试');
       console.error(err);
@@ -299,7 +301,39 @@ export default function Interview({
     );
   }
 
-  if (!session || !currentQuestion) return null;
+  if (!session) return null;
+
+  const downloadReport = async () => {
+    try {
+      const blob = await historyApi.exportInterviewPdf(session.sessionId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `interview-${session.sessionId}.pdf`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError('评估报告下载失败，请稍后重试');
+      console.error(err);
+    }
+  };
+
+  if (session.status === 'COMPLETED') {
+    const report = session.finalEvaluation;
+    return (
+      <div className="mx-auto max-w-4xl space-y-5 pb-10">
+        <InterviewPageHeader title="面试完成" subtitle="以下是本次面试的综合评估" icon={<span className="text-xl">✓</span>} />
+        <section className="rounded-2xl bg-white p-6 shadow-sm dark:bg-slate-800">
+          <div className="flex items-center justify-between gap-3"><h2 className="text-xl font-semibold text-slate-800 dark:text-white">最终评估</h2><button onClick={() => void downloadReport()} className="rounded-lg bg-primary-500 px-4 py-2 text-sm font-semibold text-white">下载评估 PDF</button></div>
+          <p className="mt-4 text-slate-700 dark:text-slate-300">综合评分：{report.overallScore ?? '-'} 分</p>
+          <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-600 dark:text-slate-300">{report.summary ?? '本次面试已完成。'}</p>
+          <div className="mt-5 grid gap-4 md:grid-cols-3"><div><h3 className="font-medium text-emerald-600">表现较好</h3><p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{report.strengths?.join('；') || '暂无'}</p></div><div><h3 className="font-medium text-amber-600">需要提升</h3><p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{report.weaknesses?.join('；') || '暂无'}</p></div><div><h3 className="font-medium text-primary-600">改进建议</h3><p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{report.suggestions?.join('；') || '暂无'}</p></div></div>
+        </section>
+      </div>
+    );
+  }
+
+  if (!currentQuestion) return null;
 
   return (
     <div className="pb-10">

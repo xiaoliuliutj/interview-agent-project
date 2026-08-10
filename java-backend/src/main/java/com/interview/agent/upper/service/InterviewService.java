@@ -14,10 +14,13 @@ import com.interview.agent.upper.domain.ResumeEntity;
 import com.interview.agent.upper.repository.CandidateRepository;
 import com.interview.agent.upper.repository.ResumeRepository;
 import org.springframework.stereotype.Service;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.Map;
 
 /** Text interview application service. All external requests use the single public DTO. */
 @Service
@@ -27,6 +30,7 @@ public class InterviewService {
     private final InterviewSessionPersistenceService sessionPersistence;
     private final AgentGateway agentGateway;
     private final InterviewKnowledgeBaseSelectionService knowledgeBaseSelection;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public InterviewService(CandidateRepository candidateRepository,
                             ResumeRepository resumeRepository,
@@ -192,10 +196,21 @@ public class InterviewService {
     }
 
     private InterviewView toView(InterviewSessionEntity session) {
+        Map<String, Object> finalEvaluation = parseFinalEvaluation(session.getFinalEvaluationJson());
         return new InterviewView(session.getId(), session.getUserId(), session.getCandidateId(), session.getResumeId(),
                 session.getJdId(), session.getSkillId(), session.getDifficulty(), session.getTotalQuestions(),
                 session.getStatus().name(), session.getAgentStateVersion(), session.getCurrentQuestion(),
-                session.getCurrentStage(),
+                session.getCurrentStage(), session.getIssuedQuestionCount(), session.getPrimaryQuestionCount(),
+                session.getFollowupCount(), finalEvaluation,
                 session.getCreatedAt(), session.getUpdatedAt());
+    }
+
+    private Map<String, Object> parseFinalEvaluation(String raw) {
+        if (raw == null || raw.isBlank()) return Map.of();
+        try {
+            return objectMapper.readValue(raw, new TypeReference<>() {});
+        } catch (Exception ignored) {
+            return Map.of();
+        }
     }
 }

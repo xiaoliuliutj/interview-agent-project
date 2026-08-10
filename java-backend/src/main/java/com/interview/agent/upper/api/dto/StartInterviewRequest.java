@@ -12,7 +12,7 @@ public record StartInterviewRequest(
         @NotBlank String resumeId,
         @NotBlank String targetRole,
         @Min(15) @Max(120) int interviewDurationMinutes,
-        @Min(2) @Max(30) int questionCount,
+        @Min(2) @Max(20) int questionCount,
         @NotBlank String desiredDifficulty,
         String skillId,
         String jdText,

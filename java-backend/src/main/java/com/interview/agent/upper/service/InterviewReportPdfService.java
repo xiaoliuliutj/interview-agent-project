@@ -5,6 +5,8 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.font.PDType0Font;
+import org.apache.fontbox.ttf.TrueTypeCollection;
+import org.apache.fontbox.ttf.TrueTypeFont;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -14,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /** Renders the candidate-visible interview transcript as a downloadable PDF. */
 @Service
@@ -26,23 +29,51 @@ public class InterviewReportPdfService {
     }
 
     public byte[] render(String sessionId, String status, int totalQuestions,
-                         List<InterviewTurnView> turns) {
-        if (fontPath == null || !Files.isRegularFile(fontPath)) {
+                         List<InterviewTurnView> turns, Map<String, Object> finalEvaluation) {
+        Path resolvedFont = resolveFont();
+        if (resolvedFont == null) {
             throw new BusinessException("INTERVIEW_PDF_FONT_REQUIRED",
-                    "AGENT_PDF_FONT_PATH must point to a readable CJK font");
+                    "未找到可用中文字体。请挂载字体文件，或使用包含 fonts-noto-cjk 的服务镜像。");
         }
+        TrueTypeCollection collection = null;
         try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            PDType0Font font = PDType0Font.load(document, fontPath.toFile());
-            addPages(document, font, reportLines(sessionId, status, totalQuestions, turns));
+            PDType0Font font;
+            if (resolvedFont.getFileName().toString().toLowerCase().endsWith(".ttc")) {
+                collection = new TrueTypeCollection(resolvedFont.toFile());
+                TrueTypeFont firstFont = collection.getFontAtIndex(0);
+                font = PDType0Font.load(document, firstFont, true);
+            } else {
+                font = PDType0Font.load(document, resolvedFont.toFile());
+            }
+            addPages(document, font, reportLines(sessionId, status, totalQuestions, turns, finalEvaluation));
             document.save(output);
             return output.toByteArray();
         } catch (IOException error) {
             throw new BusinessException("INTERVIEW_PDF_EXPORT_FAILED", "unable to generate interview PDF");
+        } finally {
+            if (collection != null) {
+                try {
+                    collection.close();
+                } catch (IOException ignored) {
+                    // The PDF bytes have already been produced; closing is best effort.
+                }
+            }
         }
     }
 
+    private Path resolveFont() {
+        if (fontPath != null && Files.isRegularFile(fontPath)) return fontPath;
+        for (Path candidate : List.of(
+                Path.of("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+                Path.of("/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf"),
+                Path.of("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"))) {
+            if (Files.isRegularFile(candidate)) return candidate;
+        }
+        return null;
+    }
+
     private List<String> reportLines(String sessionId, String status, int totalQuestions,
-                                     List<InterviewTurnView> turns) {
+                                     List<InterviewTurnView> turns, Map<String, Object> finalEvaluation) {
         List<String> lines = new ArrayList<>();
         lines.add("模拟面试记录");
         lines.add("会话 ID: " + sessionId);
@@ -54,7 +85,18 @@ public class InterviewReportPdfService {
             lines.add("第 " + index++ + " 题（" + turn.stage() + "）");
             lines.add("问题: " + turn.question());
             lines.add("回答: " + (turn.answer() == null ? "" : turn.answer()));
+            if (turn.evaluationSummary() != null && !turn.evaluationSummary().isBlank()) {
+                lines.add("回答评估: " + turn.evaluationSummary());
+            }
             lines.add("");
+        }
+        if (finalEvaluation != null && !finalEvaluation.isEmpty()) {
+            lines.add("最终评估报告");
+            lines.add("综合评分: " + finalEvaluation.getOrDefault("overallScore", "-"));
+            lines.add("综合评价: " + finalEvaluation.getOrDefault("summary", "-"));
+            lines.add("表现较好: " + finalEvaluation.getOrDefault("strengths", "-"));
+            lines.add("待提升: " + finalEvaluation.getOrDefault("weaknesses", "-"));
+            lines.add("建议: " + finalEvaluation.getOrDefault("suggestions", "-"));
         }
         return lines;
     }

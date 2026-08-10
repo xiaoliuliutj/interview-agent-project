@@ -11,6 +11,10 @@ interface InterviewView {
   stateVersion: number;
   currentQuestion: string | null;
   currentStage: string | null;
+  issuedQuestionCount: number;
+  primaryQuestionCount: number;
+  followupCount: number;
+  finalEvaluation: InterviewSession['finalEvaluation'];
   createdAt: string;
   updatedAt: string;
 }
@@ -20,12 +24,17 @@ interface InterviewTurnView {
   stage: string;
   question: string;
   answer: string | null;
+  evaluationSummary: string | null;
+  score: number | null;
 }
 
 interface InterviewDetailView { session: InterviewView; turns: InterviewTurnView[]; }
 
 function toQuestion(turn: InterviewTurnView): InterviewQuestion {
-  return { questionIndex: turn.index, question: turn.question, type: 'AGENT', category: turn.stage, userAnswer: turn.answer };
+  return {
+    questionIndex: turn.index, question: turn.question, type: 'AGENT', category: turn.stage,
+    userAnswer: turn.answer, evaluationSummary: turn.evaluationSummary, score: turn.score,
+  };
 }
 
 function toSession(view: InterviewView, turns: InterviewTurnView[] = []): InterviewSession {

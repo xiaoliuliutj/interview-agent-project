@@ -62,6 +62,12 @@ def create_app(
         return _success_response(
             api_version=payload.api_version, request_id=payload.request_id,
             run_id=payload.run_id, session=session,
+            output={
+                "currentPrimaryQuestionCount": getattr(session, "primary_question_count", 1),
+                "currentFollowupCount": getattr(session, "followup_count", 0),
+                "totalQuestionCount": getattr(session, "total_question_count", 1),
+                "questionBudget": getattr(session, "target_question_count", None),
+            },
         )
 
     @app.post("/v1/agent/respond", response_model=AgentResponse)
@@ -77,7 +83,7 @@ def create_app(
         return _success_response(
             api_version=payload.api_version, request_id=payload.request_id,
             run_id=payload.run_id, session=result.session,
-            answer=result.snapshot.answer, output=None,
+            answer=result.snapshot.answer, output=_candidate_response_output(result.snapshot.output),
             state_version=result.snapshot.state_version,
             session_status=result.snapshot.session_status,
             turn_stage=result.snapshot.turn_stage,
@@ -99,7 +105,11 @@ def create_app(
                    ))
         return _success_response(
             api_version=payload.api_version, request_id=payload.request_id,
-            run_id=payload.run_id, session=session, output=None,
+            run_id=payload.run_id, session=session,
+            output=(
+                {"finalEvaluation": session.final_evaluation.model_dump(by_alias=True)}
+                if getattr(session, "final_evaluation", None) is not None else None
+            ),
             state_version=session.state_version, session_status=session.status,
         )
 
@@ -309,6 +319,18 @@ async def _error_response(
 
 def _string_or_none(value: object) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
+
+
+def _candidate_response_output(output: dict[str, object] | None) -> dict[str, object] | None:
+    """Whitelist candidate-facing fields at the lower-layer boundary."""
+    if not output:
+        return None
+    allowed = {
+        "evaluationSummary", "evaluationScore", "currentPrimaryQuestionCount",
+        "currentFollowupCount", "totalQuestionCount", "questionBudget", "finalEvaluation",
+    }
+    visible = {key: value for key, value in output.items() if key in allowed}
+    return visible or None
 
 
 def _resume_evaluation_fingerprint(payload: AgentEvaluationRequest) -> str:

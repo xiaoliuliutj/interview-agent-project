@@ -50,13 +50,18 @@ class InterviewPlanner:
         if any(item.difficulty != profile.desired_difficulty for item in result.stages):
             raise ValueError("面试计划阶段难度与上层请求不一致")
         # 非固定阶段的题量是上限，不是模型在初始化时分配的最终数量。
-        # 统一提升为最多 4 道，实际是否继续由每轮路由决定。
+        # 阶段题量是硬上限，不在创建计划时预先固定实际题数。
         normalized_stages = []
         for item in result.stages:
-            if item.stage in {InterviewStage.OPENING, InterviewStage.SUMMARY} or item.max_primary_questions == 0:
+            if item.stage in {InterviewStage.OPENING, InterviewStage.SUMMARY}:
                 normalized_stages.append(item)
             else:
-                normalized_stages.append(item.model_copy(update={"max_primary_questions": 4}))
+                normalized_stages.append(item.model_copy(update={
+                    # 四个主要阶段都必须参与流程；这里设置的是上限，实际
+                    # 是否继续仍由每轮评估后的路由决定。
+                    "max_primary_questions": 2 if item.stage == InterviewStage.CODING else 4,
+                    "max_followups_per_question": min(item.max_followups_per_question, 2),
+                }))
         result = result.model_copy(update={"stages": normalized_stages})
         # Skill 选择属于下层 Agent 决策，写入计划快照，后续恢复会话不重新漂移。
         if not result.selected_skills:
@@ -150,6 +155,7 @@ class InterviewRoutingAgent:
             "evaluation": evaluation.model_dump(mode="json"),
             "primary_question_count": session.primary_question_count,
             "total_primary_question_count": session.total_primary_question_count,
+            "total_question_count": session.total_question_count,
             "target_question_count": session.target_question_count,
             "followup_count": session.followup_count,
             "stage_plan": session.plan.get_stage(session.current_stage),

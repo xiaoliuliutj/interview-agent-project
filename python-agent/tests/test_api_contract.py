@@ -193,7 +193,7 @@ async def test_validation_error_uses_same_standard_response_shape() -> None:
 
 
 @pytest.mark.asyncio
-async def test_respond_endpoint_hides_internal_evaluation_output() -> None:
+async def test_respond_endpoint_returns_only_candidate_visible_evaluation() -> None:
     service = FakeInterviewAgentService()
     transport = httpx.ASGITransport(app=create_app(service))
     payload = {
@@ -213,7 +213,7 @@ async def test_respond_endpoint_hides_internal_evaluation_output() -> None:
         response = await client.post("/v1/agent/respond", json=payload)
 
     assert response.status_code == 200
-    assert response.json()["output"] is None
+    assert response.json()["output"] == {"evaluationSummary": "项目描述完整。"}
     assert response.json()["turnStage"] == "OPENING"
     assert service.submitted_answer == "我在项目中使用了 Redis。"
 

@@ -22,6 +22,9 @@ class InterviewStage(StrEnum):
 # 这些是下层的硬边界，模型只能在边界内做软决策。
 MAX_PRIMARY_QUESTIONS_PER_STAGE = 4
 MAX_QUESTIONS_PER_TOPIC = 3
+MAX_TOTAL_QUESTIONS = 20
+MAX_FOLLOWUPS_PER_PRIMARY = 2
+ALGORITHM_SEVERE_SCORE_THRESHOLD = 40
 
 
 class InterviewAction(StrEnum):
@@ -48,7 +51,7 @@ class CandidateProfile(BaseModel):
     target_role: str
     interview_duration_minutes: int = Field(ge=15, le=120)
     desired_difficulty: Difficulty
-    question_count: int = Field(ge=2, le=30)
+    question_count: int = Field(ge=2, le=20)
     requested_skill_id: str | None = None
     custom_categories: list[dict[str, Any]]
     system_knowledge_base_ids: list[str]
@@ -89,6 +92,8 @@ class InterviewPlan(BaseModel):
         for item in self.stages:
             if item.max_primary_questions > MAX_PRIMARY_QUESTIONS_PER_STAGE:
                 raise ValueError("单个阶段的主问题上限不能超过 4")
+            if item.max_followups_per_question > MAX_FOLLOWUPS_PER_PRIMARY:
+                raise ValueError("单个主问题的追问不能超过 2 次")
         return self
 
     def get_stage(self, stage: InterviewStage) -> StagePlan:
@@ -176,13 +181,14 @@ class InterviewSession(BaseModel):
     difficulty: Difficulty
     selected_skills: list[str] = Field(default_factory=list)
     plan: InterviewPlan
-    # questionCount 是总主问题预算，不是初始化时分配给各阶段的固定数量。
-    target_question_count: int = Field(default=30, alias="targetQuestionCount", ge=2, le=30)
+    # questionCount 是总题量预算，开场题和追问也计入，不是预先分配给各阶段的固定数量。
+    target_question_count: int = Field(default=20, alias="targetQuestionCount", ge=2, le=20)
     status: SessionStatus = SessionStatus.ACTIVE
     current_stage: InterviewStage = InterviewStage.OPENING
     primary_question_count: int = Field(default=1, ge=0)
     total_primary_question_count: int = Field(default=1, alias="totalPrimaryQuestionCount", ge=0)
     followup_count: int = Field(default=0, ge=0)
+    total_question_count: int = Field(default=1, alias="totalQuestionCount", ge=0)
     state_version: int = Field(default=0, ge=0)
     current_question: str
     system_knowledge_base_ids: list[str] = Field(default_factory=list)

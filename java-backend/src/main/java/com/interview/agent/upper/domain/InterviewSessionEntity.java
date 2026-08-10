@@ -22,6 +22,9 @@ public class InterviewSessionEntity {
     private String skillId;
     private String difficulty;
     private int totalQuestions;
+    private int issuedQuestionCount;
+    private int primaryQuestionCount;
+    private int followupCount;
     @Enumerated(EnumType.STRING)
     private InterviewSessionStatus status;
     @Version
@@ -32,6 +35,8 @@ public class InterviewSessionEntity {
     private String currentQuestion;
     @Column(name = "current_stage", length = 32)
     private String currentStage;
+    @Column(columnDefinition = "TEXT")
+    private String finalEvaluationJson;
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -51,6 +56,7 @@ public class InterviewSessionEntity {
         this.resumeId = resumeId;
         this.jdId = jdId;
         this.totalQuestions = totalQuestions;
+        this.issuedQuestionCount = 0;
         this.status = InterviewSessionStatus.INITIALIZING;
         this.createdAt = Instant.now();
         this.updatedAt = this.createdAt;
@@ -93,6 +99,14 @@ public class InterviewSessionEntity {
         this.updatedAt = Instant.now();
     }
 
+    public void applyCounters(Integer issued, Integer primary, Integer followups) {
+        if (issued != null) this.issuedQuestionCount = issued;
+        if (primary != null) this.primaryQuestionCount = primary;
+        if (followups != null) this.followupCount = followups;
+    }
+
+    public void setFinalEvaluationJson(String value) { this.finalEvaluationJson = value; }
+
     public void complete() {
         this.status = InterviewSessionStatus.COMPLETED;
         this.updatedAt = Instant.now();
@@ -106,6 +120,10 @@ public class InterviewSessionEntity {
     public String getSkillId() { return skillId; }
     public String getDifficulty() { return difficulty; }
     public int getTotalQuestions() { return totalQuestions; }
+    public int getIssuedQuestionCount() { return issuedQuestionCount; }
+    public int getPrimaryQuestionCount() { return primaryQuestionCount; }
+    public int getFollowupCount() { return followupCount; }
+    public String getFinalEvaluationJson() { return finalEvaluationJson; }
     public InterviewSessionStatus getStatus() { return status; }
     public long getStateVersion() { return stateVersion; }
     public long getAgentStateVersion() { return agentStateVersion; }

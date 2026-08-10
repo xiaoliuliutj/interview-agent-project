@@ -23,6 +23,13 @@ public class InterviewTurnEntity {
     private String candidateAnswer;
     private String stage;
     private Instant createdAt;
+    @Column(columnDefinition = "TEXT")
+    private String evaluationSummary;
+    private Integer score;
+    @Column(columnDefinition = "TEXT")
+    private String strengthsJson;
+    @Column(columnDefinition = "TEXT")
+    private String weaknessesJson;
 
     protected InterviewTurnEntity() {
     }
@@ -40,6 +47,10 @@ public class InterviewTurnEntity {
     }
 
     public void setStage(String stage) { this.stage = stage; }
+    public void setEvaluationSummary(String value) { this.evaluationSummary = value; }
+    public void setScore(Integer value) { this.score = value; }
+    public void setStrengthsJson(String value) { this.strengthsJson = value; }
+    public void setWeaknessesJson(String value) { this.weaknessesJson = value; }
     public String getStage() { return stage; }
 
     public Long getId() { return id; }
@@ -48,4 +59,8 @@ public class InterviewTurnEntity {
     public String getQuestion() { return question; }
     public String getCandidateAnswer() { return candidateAnswer; }
     public Instant getCreatedAt() { return createdAt; }
+    public String getEvaluationSummary() { return evaluationSummary; }
+    public Integer getScore() { return score; }
+    public String getStrengthsJson() { return strengthsJson; }
+    public String getWeaknessesJson() { return weaknessesJson; }
 }

@@ -108,7 +108,7 @@ export default function InterviewHubPage() {
 
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="text-sm text-slate-600 dark:text-slate-300">主问题数量
-            <input type="number" min={2} max={30} value={config.questionCount} onChange={event => config.setQuestionCount(Number(event.target.value))} className="mt-2 w-full rounded-lg border border-slate-200 p-2 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+            <input type="number" min={2} max={20} value={config.questionCount} onChange={event => config.setQuestionCount(Number(event.target.value))} className="mt-2 w-full rounded-lg border border-slate-200 p-2 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
           </label>
           <label className="text-sm text-slate-600 dark:text-slate-300">面试时长（分钟）
             <input type="number" min={15} max={120} value={config.plannedDuration} onChange={event => config.setPlannedDuration(Number(event.target.value))} className="mt-2 w-full rounded-lg border border-slate-200 p-2 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />

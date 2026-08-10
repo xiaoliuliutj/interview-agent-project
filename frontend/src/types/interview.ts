@@ -6,6 +6,8 @@ export interface InterviewQuestion {
   type: 'AGENT';
   category: string;
   userAnswer: string | null;
+  evaluationSummary?: string | null;
+  score?: number | null;
 }
 
 export interface InterviewSession {
@@ -18,10 +20,22 @@ export interface InterviewSession {
   stateVersion: number;
   currentQuestion: string | null;
   currentStage: string | null;
+  issuedQuestionCount: number;
+  primaryQuestionCount: number;
+  followupCount: number;
+  finalEvaluation: InterviewFinalEvaluation;
   createdAt: string;
   updatedAt: string;
   currentQuestionIndex: number;
   questions: InterviewQuestion[];
+}
+
+export interface InterviewFinalEvaluation {
+  overallScore?: number;
+  summary?: string;
+  strengths?: string[];
+  weaknesses?: string[];
+  suggestions?: string[];
 }
 
 export interface CreateInterviewRequest {
