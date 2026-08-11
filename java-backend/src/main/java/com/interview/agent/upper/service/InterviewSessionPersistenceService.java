@@ -45,6 +45,7 @@ public class InterviewSessionPersistenceService {
         if (response.output() != null) {
             session.applyCounters(number(response.output().get("totalQuestionCount")),
                     number(response.output().get("currentPrimaryQuestionCount")),
+                    number(response.output().get("totalPrimaryQuestionCount")),
                     number(response.output().get("currentFollowupCount")));
         }
         sessionRepository.save(session);
@@ -106,6 +107,7 @@ public class InterviewSessionPersistenceService {
             }
             session.applyCounters(number(output.get("totalQuestionCount")),
                     number(output.get("currentPrimaryQuestionCount")),
+                    number(output.get("totalPrimaryQuestionCount")),
                     number(output.get("currentFollowupCount")));
         }
         turnRepository.save(turn);

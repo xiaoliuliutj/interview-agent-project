@@ -14,10 +14,11 @@ export default function InterviewDetailPanel({ interview }: { interview: Intervi
         <div className="mt-4 grid gap-3 text-sm text-white/90 sm:grid-cols-4">
           <span>状态：{session.status}</span>
           <span>难度：{session.difficulty}</span>
-          <span>主问题：{session.primaryQuestionCount}</span>
-          <span>总问题：{session.issuedQuestionCount} / {session.totalQuestions}</span>
+          <span>当前阶段主问题：{session.primaryQuestionCount}</span>
+          <span>累计主问题：{session.totalPrimaryQuestionCount}</span>
+          <span>已发出问题：{session.issuedQuestionCount}</span>
         </div>
-        <p className="mt-4 text-sm text-white/80">当前阶段：{session.currentStage ?? 'SUMMARY'}，当前问题追问：{session.followupCount} 次。</p>
+        <p className="mt-4 text-sm text-white/80">当前阶段：{session.currentStage ?? 'SUMMARY'}，当前问题追问：{session.followupCount} 次，动态安全上限：{session.totalQuestions} 题。</p>
       </section>
 
       {report && Object.keys(report).length > 0 && (

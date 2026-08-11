@@ -10,7 +10,6 @@ export interface UnifiedInterviewConfig {
   skillName: string;
   difficulty: Difficulty;
   resumeId: string;
-  questionCount: number;
   plannedDuration: number;
   targetRole: string;
   jdText?: string;
@@ -55,7 +54,6 @@ export default function UnifiedInterviewModal({
       skillName: config.selectedSkill?.name ?? '下层自动选择',
       difficulty: config.difficulty,
       resumeId: config.resumeId,
-      questionCount: config.questionCount,
       plannedDuration: config.plannedDuration,
       targetRole: config.targetRole.trim(),
       jdText: config.isCustomSkill ? config.customJdText.trim() : undefined,
@@ -105,10 +103,10 @@ export default function UnifiedInterviewModal({
               <section><label className="mb-3 block text-sm font-semibold text-slate-700 dark:text-slate-200">难度</label><div className="grid grid-cols-3 gap-2">{DIFFICULTY_OPTIONS.map(option => <button key={option.value} onClick={() => config.setDifficulty(option.value)} className={`rounded-xl border-2 p-3 ${config.difficulty === option.value ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20' : 'border-slate-200 dark:border-slate-700'}`}><span className="block text-sm font-medium text-slate-800 dark:text-white">{option.label}</span><span className="text-xs text-slate-400">{option.desc}</span></button>)}</div></section>
 
               <button onClick={() => config.setShowMore(!config.showMore)} className="flex w-full items-center gap-2 text-sm text-slate-500"><span>更多参数</span>{config.showMore ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}<span className="flex-1 border-t border-slate-200 dark:border-slate-700" /></button>
-              {config.showMore && <section className="grid gap-4 rounded-xl bg-slate-50 p-4 dark:bg-slate-900/40 sm:grid-cols-2"><label className="text-sm text-slate-600 dark:text-slate-300">总题量上限（含追问）<input type="number" min={2} max={20} value={config.questionCount} onChange={event => config.setQuestionCount(Number(event.target.value))} className="mt-2 w-full rounded-lg border border-slate-200 p-2 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label><label className="text-sm text-slate-600 dark:text-slate-300">面试时长（分钟）<input type="number" min={15} max={120} value={config.plannedDuration} onChange={event => config.setPlannedDuration(Number(event.target.value))} className="mt-2 w-full rounded-lg border border-slate-200 p-2 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label><div className="flex items-center gap-2 text-xs text-slate-500"><FileStack className="h-4 w-4" />系统会按六阶段动态推进</div></section>}
+              {config.showMore && <section className="grid gap-4 rounded-xl bg-slate-50 p-4 dark:bg-slate-900/40"><label className="text-sm text-slate-600 dark:text-slate-300">面试时长（分钟）<input type="number" min={15} max={120} value={config.plannedDuration} onChange={event => config.setPlannedDuration(Number(event.target.value))} className="mt-2 w-full rounded-lg border border-slate-200 p-2 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label><div className="flex items-center gap-2 text-xs text-slate-500"><FileStack className="h-4 w-4" />题量由 Agent 根据回答动态决定，最多 20 题</div></section>}
             </div>
 
-            <div className="flex gap-3 border-t border-slate-100 bg-slate-50 p-6 dark:border-slate-700 dark:bg-slate-900/40"><button onClick={onClose} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm dark:border-slate-700 dark:text-slate-200">取消</button><button onClick={handleStart} disabled={config.isCustomStartDisabled || !config.resumeId || !config.targetRole.trim() || config.questionCount < 2 || config.plannedDuration < 15} className="flex-1 rounded-xl bg-primary-500 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">{startButtonText}</button></div>
+            <div className="flex gap-3 border-t border-slate-100 bg-slate-50 p-6 dark:border-slate-700 dark:bg-slate-900/40"><button onClick={onClose} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm dark:border-slate-700 dark:text-slate-200">取消</button><button onClick={handleStart} disabled={config.isCustomStartDisabled || !config.resumeId || !config.targetRole.trim() || config.plannedDuration < 15} className="flex-1 rounded-xl bg-primary-500 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">{startButtonText}</button></div>
           </motion.div>
         </div>
       )}

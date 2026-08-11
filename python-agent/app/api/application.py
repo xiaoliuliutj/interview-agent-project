@@ -10,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.agent.evaluation.agent import ResumeEvaluationAgent
-from app.agent.interview.models import CandidateProfile, InterviewSession
+from app.agent.interview.models import CandidateProfile, InterviewSession, DEFAULT_TARGET_QUESTION_COUNT
 from app.agent.interview.service import InterviewAgentService
 from app.agent.memory.service import MemoryService
 from app.agent.rag.models import KnowledgeDocument
@@ -56,7 +56,9 @@ def create_app(
         session = await _resolve_service(request).initialize_session(
             user_id=payload.user_id,
             session_id=payload.session_id,
-            profile=CandidateProfile.model_validate(payload.candidate.model_dump()),
+            profile=CandidateProfile.model_validate(
+                {**payload.candidate.model_dump(), "question_count": DEFAULT_TARGET_QUESTION_COUNT}
+            ),
             run_id=payload.run_id,
         )
         return _success_response(
@@ -64,6 +66,7 @@ def create_app(
             run_id=payload.run_id, session=session,
             output={
                 "currentPrimaryQuestionCount": getattr(session, "primary_question_count", 1),
+                "totalPrimaryQuestionCount": getattr(session, "total_primary_question_count", 1),
                 "currentFollowupCount": getattr(session, "followup_count", 0),
                 "totalQuestionCount": getattr(session, "total_question_count", 1),
                 "questionBudget": getattr(session, "target_question_count", None),
@@ -326,7 +329,7 @@ def _candidate_response_output(output: dict[str, object] | None) -> dict[str, ob
     if not output:
         return None
     allowed = {
-        "evaluationSummary", "evaluationScore", "currentPrimaryQuestionCount",
+        "evaluationSummary", "evaluationScore", "strengths", "weaknesses", "currentPrimaryQuestionCount", "totalPrimaryQuestionCount",
         "currentFollowupCount", "totalQuestionCount", "questionBudget", "finalEvaluation",
     }
     visible = {key: value for key, value in output.items() if key in allowed}

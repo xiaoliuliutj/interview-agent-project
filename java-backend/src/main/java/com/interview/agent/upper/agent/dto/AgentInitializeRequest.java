@@ -28,7 +28,6 @@ public record AgentInitializeRequest(
             @NotBlank String targetRole,
             @NotNull @Min(15) @Max(120) Integer interviewDurationMinutes,
             @NotBlank String desiredDifficulty,
-            @NotNull @Min(2) @Max(20) Integer questionCount,
             String requestedSkillId,
             @NotNull List<Map<String, Object>> customCategories,
             @NotNull List<String> systemKnowledgeBaseIds,

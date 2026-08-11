@@ -127,10 +127,10 @@ def build_plan() -> InterviewPlan:
         candidate_summary="测试候选人", strategy_summary="测试计划",
         stages=[
             StagePlan(stage=InterviewStage.OPENING, max_primary_questions=1, max_followups_per_question=0, difficulty=Difficulty.EASY, topics=["自我介绍"], time_budget_minutes=2),
-            StagePlan(stage=InterviewStage.PROJECT, max_primary_questions=1, max_followups_per_question=1, difficulty=Difficulty.MEDIUM, topics=["项目"], time_budget_minutes=8),
-            StagePlan(stage=InterviewStage.FUNDAMENTAL, max_primary_questions=2, max_followups_per_question=1, difficulty=Difficulty.MEDIUM, topics=["Java"], time_budget_minutes=10),
-            StagePlan(stage=InterviewStage.SCENARIO, max_primary_questions=1, max_followups_per_question=1, difficulty=Difficulty.MEDIUM, topics=["一致性"], time_budget_minutes=8),
-            StagePlan(stage=InterviewStage.CODING, max_primary_questions=1, max_followups_per_question=0, difficulty=Difficulty.MEDIUM, topics=["算法"], time_budget_minutes=10),
+            StagePlan(stage=InterviewStage.PROJECT, max_primary_questions=4, max_followups_per_question=2, difficulty=Difficulty.MEDIUM, topics=["项目"], time_budget_minutes=8),
+            StagePlan(stage=InterviewStage.FUNDAMENTAL, max_primary_questions=4, max_followups_per_question=2, difficulty=Difficulty.MEDIUM, topics=["Java"], time_budget_minutes=10),
+            StagePlan(stage=InterviewStage.SCENARIO, max_primary_questions=4, max_followups_per_question=2, difficulty=Difficulty.MEDIUM, topics=["一致性"], time_budget_minutes=8),
+            StagePlan(stage=InterviewStage.CODING, max_primary_questions=2, max_followups_per_question=0, difficulty=Difficulty.MEDIUM, topics=["算法"], time_budget_minutes=10),
             StagePlan(stage=InterviewStage.SUMMARY, max_primary_questions=1, max_followups_per_question=0, difficulty=Difficulty.EASY, topics=["总结"], time_budget_minutes=2),
         ],
     )
@@ -164,7 +164,7 @@ def build_profile() -> CandidateProfile:
     return CandidateProfile(
         candidate_id="candidate-1", resume_id="resume-1", resume_text="候选人有 Redis 项目经验",
         jd_text="Java 后端岗位", target_role="Java 后端", interview_duration_minutes=30,
-        desired_difficulty=Difficulty.MEDIUM, question_count=7, custom_categories=[],
+        desired_difficulty=Difficulty.MEDIUM, question_count=20, custom_categories=[],
         system_knowledge_base_ids=[], user_knowledge_base_ids=[],
     )
 
@@ -223,12 +223,13 @@ async def test_follow_up_is_routed_after_evaluation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_end_route_does_not_require_a_fake_next_topic() -> None:
+async def test_end_route_in_middle_stage_advances_instead_of_skipping_remaining_stages() -> None:
     repository, events = InMemorySessionRepository(), []
     service, _, _, _ = build_service(
-        repository, [evaluation(), evaluation()],
+        repository, [evaluation(), evaluation(), evaluation()],
         [
             InterviewRoute(action=InterviewAction.NEXT_STAGE, next_topic="项目架构"),
+            InterviewRoute(action=InterviewAction.NEXT_QUESTION, next_topic="项目架构"),
             InterviewRoute(action=InterviewAction.END_INTERVIEW),
         ],
         events,
@@ -240,17 +241,50 @@ async def test_end_route_does_not_require_a_fake_next_topic() -> None:
         expected_state_version=0,
     )
 
-    updated = (await service.submit_answer_for_run(
+    await service.submit_answer_for_run(
         user_id="user-1", session_id="session-1", candidate_answer="结束面试",
         run_id="run-2", expected_session_status=SessionStatus.ACTIVE,
         expected_state_version=1,
+    )
+
+    updated = (await service.submit_answer_for_run(
+        user_id="user-1", session_id="session-1", candidate_answer="确认结束",
+        run_id="run-3", expected_session_status=SessionStatus.ACTIVE,
+        expected_state_version=2,
     )).session
 
-    assert updated.status == "COMPLETED"
-    assert "2" in updated.current_question
-    assert updated.final_evaluation is not None
-    assert 0 <= updated.final_evaluation.overall_score <= 100
-    assert events == ["evaluate", "route", "question", "evaluate", "route"]
+    assert updated.status == "ACTIVE"
+    assert updated.current_stage == InterviewStage.FUNDAMENTAL
+    assert updated.current_question == "Java 的具体问题"
+    assert updated.final_evaluation is None
+    assert events == ["evaluate", "route", "question", "evaluate", "route", "question", "evaluate", "route", "question"]
+
+
+@pytest.mark.asyncio
+async def test_completed_session_always_contains_a_candidate_visible_final_evaluation() -> None:
+    repository, events = InMemorySessionRepository(), []
+    service, _, _, _ = build_service(
+        repository,
+        [evaluation(72, "基础回答完整")],
+        [InterviewRoute(action=InterviewAction.NEXT_STAGE, next_topic="项目架构")],
+        events,
+    )
+    await service.initialize_session(user_id="user-1", session_id="session-1", profile=build_profile())
+    await service.submit_answer_for_run(
+        user_id="user-1", session_id="session-1", candidate_answer="开场回答",
+        run_id="run-1", expected_session_status=SessionStatus.ACTIVE,
+        expected_state_version=0,
+    )
+
+    completed = await service.complete_session(
+        user_id="user-1", session_id="session-1",
+        expected_session_status=SessionStatus.ACTIVE, expected_state_version=1,
+    )
+
+    assert completed.status == SessionStatus.COMPLETED
+    assert completed.final_evaluation is not None
+    assert completed.final_evaluation.overall_score == 72
+    assert "综合表现评分" in completed.final_evaluation.summary
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,7 @@
 package com.interview.agent.upper.api;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.interview.agent.upper.api.dto.ApiResult;
 import com.interview.agent.upper.api.dto.InterviewView;
 import com.interview.agent.upper.api.dto.ResumeAnalysisView;
@@ -47,6 +49,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/resumes")
 public class ResumeController {
+    private final ObjectMapper objectMapper = new ObjectMapper();
     private final Tika tika = new Tika();
     private final ResumeRepository resumeRepository;
     private final CandidateRepository candidateRepository;
@@ -313,7 +316,17 @@ public class ResumeController {
                 session.getJdId(), session.getSkillId(), session.getDifficulty(),
                 session.getTotalQuestions(), session.getStatus().name(), session.getAgentStateVersion(),
                 session.getCurrentQuestion(), session.getCurrentStage(), session.getIssuedQuestionCount(),
-                session.getPrimaryQuestionCount(), session.getFollowupCount(), java.util.Map.of(),
+                session.getPrimaryQuestionCount(), session.getTotalPrimaryQuestionCount(), session.getFollowupCount(),
+                parseFinalEvaluation(session.getFinalEvaluationJson()),
                 session.getCreatedAt(), session.getUpdatedAt());
+    }
+
+    private Map<String, Object> parseFinalEvaluation(String raw) {
+        if (raw == null || raw.isBlank()) return Map.of();
+        try {
+            return objectMapper.readValue(raw, new TypeReference<>() {});
+        } catch (Exception ignored) {
+            return Map.of();
+        }
     }
 }

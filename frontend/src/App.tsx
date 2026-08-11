@@ -83,7 +83,6 @@ interface InterviewEntryState {
   interviewConfig?: {
     skillId?: string;
     difficulty?: Difficulty;
-    questionCount?: number;
     customCategories?: CategoryDTO[];
     jdText?: string;
     targetRole?: string;

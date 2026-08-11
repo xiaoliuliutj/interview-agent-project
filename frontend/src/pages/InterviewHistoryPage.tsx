@@ -102,9 +102,19 @@ export default function InterviewHistoryPage({
                 <button onClick={() => onViewInterview(session.sessionId, session.resumeId)} className="font-medium text-slate-800 hover:text-primary-500 dark:text-white">
                   {session.skillId ?? '通用'} · {session.difficulty}
                 </button>
-                <p className="mt-1 text-sm text-slate-500">{formatDateTime(session.createdAt)} · {session.totalQuestions} 个主问题 · {session.status}</p>
+                <p className="mt-1 text-sm text-slate-500">{formatDateTime(session.createdAt)} · 已发出 {session.issuedQuestionCount} 题 · 动态上限 {session.totalQuestions} · {session.status}</p>
+                {session.finalEvaluation?.summary && (
+                  <p className="mt-2 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">
+                    面试评价：{session.finalEvaluation.summary}
+                  </p>
+                )}
               </div>
               <div className="flex items-center gap-1">
+                {session.finalEvaluation?.overallScore != null && (
+                  <span className="mr-2 rounded-full bg-primary-50 px-3 py-1 text-sm font-semibold text-primary-600 dark:bg-primary-900/30 dark:text-primary-300">
+                    {session.finalEvaluation.overallScore} 分
+                  </span>
+                )}
                 {isResumable(session) && (
                   <button title="继续面试" onClick={() => onContinueInterview?.(session.sessionId)} className="rounded-lg p-2 text-slate-400 hover:bg-primary-50 hover:text-primary-500">
                     <PlayCircle className="h-5 w-5" />

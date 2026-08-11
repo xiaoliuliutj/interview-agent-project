@@ -45,7 +45,6 @@ export default function InterviewHubPage() {
         interviewConfig: {
           skillId: config.skillId,
           difficulty: config.difficulty,
-          questionCount: config.questionCount,
           targetRole: config.targetRole.trim(),
           interviewDurationMinutes: config.plannedDuration,
           jdText: config.skillId === CUSTOM_SKILL_ID ? config.customJdText.trim() : undefined,
@@ -107,16 +106,13 @@ export default function InterviewHubPage() {
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <label className="text-sm text-slate-600 dark:text-slate-300">主问题数量
-            <input type="number" min={2} max={20} value={config.questionCount} onChange={event => config.setQuestionCount(Number(event.target.value))} className="mt-2 w-full rounded-lg border border-slate-200 p-2 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
-          </label>
           <label className="text-sm text-slate-600 dark:text-slate-300">面试时长（分钟）
             <input type="number" min={15} max={120} value={config.plannedDuration} onChange={event => config.setPlannedDuration(Number(event.target.value))} className="mt-2 w-full rounded-lg border border-slate-200 p-2 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
           </label>
         </div>
 
         {error && <p className="text-sm text-red-500">{error}</p>}
-        <button onClick={startInterview} disabled={config.isCustomStartDisabled || !config.resumeId || !config.targetRole.trim() || config.questionCount < 2 || config.plannedDuration < 15} className="rounded-xl bg-primary-500 px-6 py-3 font-semibold text-white disabled:opacity-50">开始文本面试</button>
+        <button onClick={startInterview} disabled={config.isCustomStartDisabled || !config.resumeId || !config.targetRole.trim() || config.plannedDuration < 15} className="rounded-xl bg-primary-500 px-6 py-3 font-semibold text-white disabled:opacity-50">开始文本面试</button>
       </section>
 
       <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">

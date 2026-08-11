@@ -59,9 +59,11 @@ export default function InterviewChatPanel({
             当前阶段：{session.currentStage || currentQuestion?.category || '面试'}
           </span>
             <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-500 dark:text-slate-400">
-              <span>主问题：{session.primaryQuestionCount}</span>
-              <span>当前追问：{session.followupCount}</span>
-              <span>总问题：{session.issuedQuestionCount} / {session.totalQuestions}</span>
+              <span>当前阶段主问题：{session.primaryQuestionCount}</span>
+              <span>累计主问题：{session.totalPrimaryQuestionCount}</span>
+              <span>当前主问题追问：{session.followupCount}</span>
+              <span>已发出问题：{session.issuedQuestionCount}</span>
+              <span>动态安全上限：{session.totalQuestions}</span>
             </div>
         </div>
             <div className="h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
@@ -72,6 +74,9 @@ export default function InterviewChatPanel({
             transition={{ duration: 0.3 }}
           />
         </div>
+        <p className="mt-2 text-xs text-slate-400 dark:text-slate-500">
+          实际题量由 Agent 根据每轮回答质量、阶段覆盖和剩余预算动态决定，不要求问满上限。
+        </p>
       </div>
 
       {/* 聊天区域 */}

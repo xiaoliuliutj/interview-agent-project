@@ -18,6 +18,7 @@ public record InterviewView(
         String currentStage,
         int issuedQuestionCount,
         int primaryQuestionCount,
+        int totalPrimaryQuestionCount,
         int followupCount,
         Map<String, Object> finalEvaluation,
         Instant createdAt,

@@ -22,6 +22,7 @@ export interface InterviewSession {
   currentStage: string | null;
   issuedQuestionCount: number;
   primaryQuestionCount: number;
+  totalPrimaryQuestionCount: number;
   followupCount: number;
   finalEvaluation: InterviewFinalEvaluation;
   createdAt: string;
@@ -42,7 +43,6 @@ export interface CreateInterviewRequest {
   resumeId: string;
   targetRole: string;
   interviewDurationMinutes: number;
-  questionCount: number;
   difficulty: string;
   skillId?: string;
   jdText?: string;

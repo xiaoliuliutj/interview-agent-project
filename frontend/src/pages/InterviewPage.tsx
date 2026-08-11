@@ -3,6 +3,7 @@ import {motion} from 'framer-motion';
 import {interviewApi} from '../api/interview';
 import ConfirmDialog from '../components/ConfirmDialog';
 import InterviewChatPanel from '../components/InterviewChatPanel';
+import InterviewMessageBubble from '../components/InterviewMessageBubble';
 import InterviewPageHeader from '../components/InterviewPageHeader';
 import type {InterviewQuestion, InterviewSession} from '../types/interview';
 import type {Difficulty} from '../components/UnifiedInterviewModal';
@@ -48,7 +49,6 @@ interface InterviewProps {
   resumeId?: string;
   sessionIdToResume?: string;
   initialConfig?: {
-    questionCount?: number;
     skillId?: string;
     difficulty?: Difficulty;
     customCategories?: CategoryDTO[];
@@ -77,7 +77,6 @@ export default function Interview({
   const startedRef = useRef(false);
   const pendingAnswerSubmissionRef = useRef<PendingAnswerSubmission | null>(null);
 
-  const questionCount = initialConfig?.questionCount;
   const skillId = initialConfig?.skillId;
   const difficulty = initialConfig?.difficulty;
   const customCategories = initialConfig?.customCategories ?? [];
@@ -103,14 +102,13 @@ export default function Interview({
     setError('');
 
     try {
-      if (!resumeId || !questionCount || !difficulty || !targetRole || !interviewDurationMinutes) {
-        throw new Error('缺少创建面试所需的简历、岗位、难度、题量或时长参数');
+      if (!resumeId || !difficulty || !targetRole || !interviewDurationMinutes) {
+        throw new Error('缺少创建面试所需的简历、岗位、难度或时长参数');
       }
       const newSession = await interviewApi.createSession({
         resumeId,
         targetRole,
         interviewDurationMinutes,
-        questionCount,
         skillId,
         difficulty,
         jdText,
@@ -147,7 +145,7 @@ export default function Interview({
     }
   };
 
-  const initSession = (s: InterviewSession) => {
+  const initSession = (s: InterviewSession, rebuildMessages = true) => {
     setSession(s);
 
     if (s.questions.length > 0) {
@@ -162,6 +160,8 @@ export default function Interview({
         pendingAnswerSubmissionRef.current = pending;
         setAnswer(pending.answer);
       }
+
+      if (!rebuildMessages) return;
 
       // 重建消息历史
       const restoredMessages: Message[] = [];
@@ -182,16 +182,23 @@ export default function Interview({
           if (q.evaluationSummary) {
             restoredMessages.push({
               type: 'interviewer',
-              content: `回答评估：${q.evaluationSummary}`,
+              content: `回答评估：${q.evaluationSummary}${q.score == null ? '' : `（${q.score} 分）`}`,
               category: q.category,
             });
           }
         }
       }
+      if (s.status === 'COMPLETED') {
+        restoredMessages.push({
+          type: 'interviewer',
+          content: '本次面试已结束，下面是本次面试的综合评估。',
+          category: 'SUMMARY',
+        });
+      }
       setMessages(restoredMessages);
     } else {
       setCurrentQuestion(null);
-      setMessages([]);
+      if (rebuildMessages) setMessages([]);
     }
   };
 
@@ -238,6 +245,8 @@ export default function Interview({
       sessionStorage.removeItem(pendingAnswerStorageKey(session.sessionId));
       setAnswer('');
 
+      // 每轮都使用后端返回的完整问答记录重建消息。这样无论正常提交、
+      // 网络重试还是幂等重放，旧问题、用户回答、逐轮评估和下一题都不会丢失。
       initSession(response.session);
     } catch (err) {
       setError('提交答案失败，请重试');
@@ -323,6 +332,14 @@ export default function Interview({
     return (
       <div className="mx-auto max-w-4xl space-y-5 pb-10">
         <InterviewPageHeader title="面试完成" subtitle="以下是本次面试的综合评估" icon={<span className="text-xl">✓</span>} />
+        <section className="rounded-2xl bg-white p-6 shadow-sm dark:bg-slate-800">
+          <h2 className="mb-4 text-lg font-semibold text-slate-800 dark:text-white">面试对话记录</h2>
+          <div className="max-h-[32rem] space-y-3 overflow-y-auto rounded-xl bg-slate-50 p-4 dark:bg-slate-900/40">
+            {messages.map((message, index) => (
+              <InterviewMessageBubble key={`${index}-${message.content}`} role={message.type === 'interviewer' ? 'interviewer' : 'user'} text={message.content} category={message.category} />
+            ))}
+          </div>
+        </section>
         <section className="rounded-2xl bg-white p-6 shadow-sm dark:bg-slate-800">
           <div className="flex items-center justify-between gap-3"><h2 className="text-xl font-semibold text-slate-800 dark:text-white">最终评估</h2><button onClick={() => void downloadReport()} className="rounded-lg bg-primary-500 px-4 py-2 text-sm font-semibold text-white">下载评估 PDF</button></div>
           <p className="mt-4 text-slate-700 dark:text-slate-300">综合评分：{report.overallScore ?? '-'} 分</p>

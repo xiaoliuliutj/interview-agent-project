@@ -53,15 +53,17 @@ class InterviewPlanner:
         # 阶段题量是硬上限，不在创建计划时预先固定实际题数。
         normalized_stages = []
         for item in result.stages:
-            if item.stage in {InterviewStage.OPENING, InterviewStage.SUMMARY}:
-                normalized_stages.append(item)
+            if item.stage == InterviewStage.OPENING:
+                limits = {"max_primary_questions": 1, "max_followups_per_question": 0}
+            elif item.stage == InterviewStage.SUMMARY:
+                limits = {"max_primary_questions": 1, "max_followups_per_question": 0}
+            elif item.stage == InterviewStage.CODING:
+                limits = {"max_primary_questions": 2, "max_followups_per_question": 0}
             else:
-                normalized_stages.append(item.model_copy(update={
-                    # 四个主要阶段都必须参与流程；这里设置的是上限，实际
-                    # 是否继续仍由每轮评估后的路由决定。
-                    "max_primary_questions": 2 if item.stage == InterviewStage.CODING else 4,
-                    "max_followups_per_question": min(item.max_followups_per_question, 2),
-                }))
+                # 这是能力上限而不是预先确定的实际题数。三个中间阶段必须
+                # 都能动态使用 2~4 道主问题，并允许每道题最多追问两次。
+                limits = {"max_primary_questions": 4, "max_followups_per_question": 2}
+            normalized_stages.append(item.model_copy(update=limits))
         result = result.model_copy(update={"stages": normalized_stages})
         # Skill 选择属于下层 Agent 决策，写入计划快照，后续恢复会话不重新漂移。
         if not result.selected_skills:

@@ -23,8 +23,10 @@ class InterviewStage(StrEnum):
 MAX_PRIMARY_QUESTIONS_PER_STAGE = 4
 MAX_QUESTIONS_PER_TOPIC = 3
 MAX_TOTAL_QUESTIONS = 20
+DEFAULT_TARGET_QUESTION_COUNT = MAX_TOTAL_QUESTIONS
 MAX_FOLLOWUPS_PER_PRIMARY = 2
 ALGORITHM_SEVERE_SCORE_THRESHOLD = 40
+MIN_PRIMARY_QUESTIONS_PER_STAGE = 2
 
 
 class InterviewAction(StrEnum):
@@ -51,7 +53,7 @@ class CandidateProfile(BaseModel):
     target_role: str
     interview_duration_minutes: int = Field(ge=15, le=120)
     desired_difficulty: Difficulty
-    question_count: int = Field(ge=2, le=20)
+    question_count: int = Field(default=DEFAULT_TARGET_QUESTION_COUNT, ge=2, le=20)
     requested_skill_id: str | None = None
     custom_categories: list[dict[str, Any]]
     system_knowledge_base_ids: list[str]

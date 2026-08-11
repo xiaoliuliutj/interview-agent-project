@@ -34,6 +34,7 @@ from .models import (
     MAX_TOTAL_QUESTIONS,
     MAX_FOLLOWUPS_PER_PRIMARY,
     ALGORITHM_SEVERE_SCORE_THRESHOLD,
+    MIN_PRIMARY_QUESTIONS_PER_STAGE,
 )
 from .repository import InterviewSessionRepository
 from .workflow import InterviewWorkflow
@@ -355,35 +356,47 @@ class InterviewAgentService:
             return {InterviewAction.NEXT_STAGE}
 
         stage_plan = session.plan.get_stage(session.current_stage)
-        actions = {InterviewAction.NEXT_STAGE, InterviewAction.END_INTERVIEW}
+        actions: set[InterviewAction] = set()
         total_question_count = getattr(
             session, "total_question_count", getattr(session, "total_primary_question_count", 0)
         )
         if total_question_count >= min(session.target_question_count, MAX_TOTAL_QUESTIONS):
-            return actions
+            return {InterviewAction.END_INTERVIEW}
+        stage_count = session.stage_question_counts.get(session.current_stage.value, 0)
+        stage_limit = 2 if session.current_stage == InterviewStage.CODING else max(
+            MIN_PRIMARY_QUESTIONS_PER_STAGE,
+            min(stage_plan.max_primary_questions, MAX_PRIMARY_QUESTIONS_PER_STAGE),
+        )
         answer_needs_followup = evaluation is not None and (
             evaluation.score <= 60 or bool(evaluation.weaknesses)
         )
+        current_topic = (session.current_topic or "").strip()
+        current_topic_key = self._canonical_topic_key(session, current_topic)
+        current_topic_count = session.topic_question_counts.get(current_topic_key, 0)
         if (
             answer_needs_followup
             and session.followup_count < min(stage_plan.max_followups_per_question, MAX_FOLLOWUPS_PER_PRIMARY)
+            and current_topic_count < MAX_QUESTIONS_PER_TOPIC
         ):
             actions.add(InterviewAction.FOLLOW_UP)
         if session.current_stage == InterviewStage.CODING:
             # 算法第二题不是普通的阶段扩展：只有第一题严重不足才允许出题。
             if (
-                session.primary_question_count < 2
+                stage_count == 1
                 and evaluation is not None
                 and evaluation.score < ALGORITHM_SEVERE_SCORE_THRESHOLD
             ):
-                actions.add(InterviewAction.NEXT_QUESTION)
-            return actions
-        if (
-            session.primary_question_count < min(
-                stage_plan.max_primary_questions, MAX_PRIMARY_QUESTIONS_PER_STAGE
-            )
-        ):
+                return {InterviewAction.NEXT_QUESTION}
+            # 第一题不属于严重失分，或强制补问的第二题已经完成，直接进入
+            # SUMMARY；不能把算法结束暴露成“可提前结束整场”的普通路由。
+            return {InterviewAction.NEXT_STAGE}
+        if stage_count < min(MIN_PRIMARY_QUESTIONS_PER_STAGE, stage_limit):
             actions.add(InterviewAction.NEXT_QUESTION)
+        else:
+            actions.update({InterviewAction.NEXT_QUESTION, InterviewAction.NEXT_STAGE})
+        if stage_count >= stage_limit:
+            actions.discard(InterviewAction.NEXT_QUESTION)
+            actions.add(InterviewAction.NEXT_STAGE)
         return actions
 
     async def _replan_after_opening(
@@ -432,60 +445,118 @@ class InterviewAgentService:
             return InterviewRoute(action=InterviewAction.END_INTERVIEW)
 
         if route.action not in allowed_actions:
-            fallback_topic = (route.next_topic or session.current_topic or "").strip() or None
-            if InterviewAction.NEXT_QUESTION in allowed_actions and fallback_topic:
-                return InterviewRoute(action=InterviewAction.NEXT_QUESTION, next_topic=fallback_topic)
-            if InterviewAction.NEXT_STAGE in allowed_actions:
-                if next_stage is not None and next_stage != InterviewStage.SUMMARY:
-                    next_topics = session.plan.get_stage(next_stage).topics
-                    fallback_topic = next_topics[0] if next_topics else fallback_topic
-                return InterviewRoute(action=InterviewAction.NEXT_STAGE, next_topic=fallback_topic)
-            return InterviewRoute(action=InterviewAction.END_INTERVIEW)
+            return self._fallback_route(session, route.action, allowed_actions, next_stage)
 
         if route.action == InterviewAction.FOLLOW_UP and evaluation is not None and (
             evaluation.score > 60 and not evaluation.weaknesses
         ):
-            return InterviewRoute(action=InterviewAction.NEXT_STAGE)
+            return self._fallback_route(
+                session,
+                InterviewAction.FOLLOW_UP,
+                allowed_actions - {InterviewAction.FOLLOW_UP},
+                next_stage,
+            )
 
         if route.action == InterviewAction.FOLLOW_UP:
             # 追问必须围绕同一个主问题，不能借 FOLLOW_UP 偷换新的主题。
-            route = InterviewRoute(
-                action=InterviewAction.FOLLOW_UP,
-                next_topic=session.current_topic or route.next_topic,
-            )
-
-        topic = (route.next_topic or session.current_topic or "").strip()
-        topic_key = self._canonical_topic_key(session, topic)
-        topic_count = session.topic_question_counts.get(topic_key, 0) if topic_key else 0
-        stage_count = session.stage_question_counts.get(session.current_stage.value, 0)
-        stage_limit = 2 if session.current_stage == InterviewStage.CODING else MAX_PRIMARY_QUESTIONS_PER_STAGE
-        topic_or_stage_exhausted = (
-            (bool(topic_key) and topic_count >= MAX_QUESTIONS_PER_TOPIC)
-            or stage_count >= stage_limit
-        )
-        if not topic_or_stage_exhausted and route.action in allowed_actions:
-            if route.action == InterviewAction.NEXT_STAGE and next_stage not in {None, InterviewStage.SUMMARY}:
-                next_topics = session.plan.get_stage(next_stage).topics
-                if next_topics and not route.next_topic:
-                    return InterviewRoute(action=route.action, next_topic=next_topics[0])
-            return route
-
-        # 达到边界时切换阶段，不让模型继续在同一个方向上出题。
-        if InterviewAction.NEXT_STAGE in allowed_actions and next_stage is not None:
-            if next_stage == InterviewStage.SUMMARY:
-                return InterviewRoute(action=InterviewAction.NEXT_STAGE)
-            next_topics = session.plan.get_stage(next_stage).topics
-            if not next_topics and not topic:
-                return InterviewRoute(action=InterviewAction.END_INTERVIEW)
-            return InterviewRoute(
-                action=InterviewAction.NEXT_STAGE,
-                next_topic=next_topics[0] if next_topics else topic,
-            )
-        if InterviewAction.NEXT_QUESTION in allowed_actions and topic:
-            return InterviewRoute(action=InterviewAction.NEXT_QUESTION, next_topic=topic)
-        if InterviewAction.FOLLOW_UP in allowed_actions and topic:
+            topic = (session.current_topic or route.next_topic or "").strip()
+            topic_key = self._canonical_topic_key(session, topic)
+            if not topic or session.topic_question_counts.get(topic_key, 0) >= MAX_QUESTIONS_PER_TOPIC:
+                return self._fallback_route(
+                    session,
+                    InterviewAction.FOLLOW_UP,
+                    allowed_actions - {InterviewAction.FOLLOW_UP},
+                    next_stage,
+                )
             return InterviewRoute(action=InterviewAction.FOLLOW_UP, next_topic=topic)
+
+        if route.action == InterviewAction.NEXT_QUESTION:
+            topic = (route.next_topic or "").strip()
+            topic_key = self._canonical_topic_key(session, topic) if topic else ""
+            if not topic or session.topic_question_counts.get(topic_key, 0) >= MAX_QUESTIONS_PER_TOPIC:
+                topic = self._current_stage_topic(session)
+            if not topic:
+                return self._fallback_route(
+                    session,
+                    InterviewAction.NEXT_QUESTION,
+                    allowed_actions - {InterviewAction.NEXT_QUESTION},
+                    next_stage,
+                )
+            return InterviewRoute(action=InterviewAction.NEXT_QUESTION, next_topic=topic)
+
+        if route.action == InterviewAction.NEXT_STAGE:
+            return self._next_stage_route(session, next_stage, route.next_topic)
+
+        return route
+
+    def _fallback_route(
+        self,
+        session: InterviewSession,
+        rejected_action: InterviewAction,
+        allowed_actions: set[InterviewAction],
+        next_stage: InterviewStage | None,
+    ) -> InterviewRoute:
+        """把越界动作改成仍然符合当前阶段语义的确定性动作。"""
+        # 已满足中间阶段最低覆盖后，模型若错误地要求结束整场，应推进到
+        # 下一阶段，而不是继续把后续阶段全部跳过。
+        if rejected_action == InterviewAction.END_INTERVIEW and InterviewAction.NEXT_STAGE in allowed_actions:
+            return self._next_stage_route(session, next_stage)
+
+        # 未达到最低覆盖、算法低分强制补题、或高分时误选追问，都优先在
+        # 当前阶段切换主问题。主题必须从当前阶段计划中重新选择。
+        if InterviewAction.NEXT_QUESTION in allowed_actions:
+            topic = self._current_stage_topic(session)
+            if topic:
+                return InterviewRoute(action=InterviewAction.NEXT_QUESTION, next_topic=topic)
+
+        if InterviewAction.NEXT_STAGE in allowed_actions:
+            return self._next_stage_route(session, next_stage)
+
+        if InterviewAction.FOLLOW_UP in allowed_actions:
+            topic = (session.current_topic or self._current_stage_topic(session) or "").strip()
+            if topic:
+                return InterviewRoute(action=InterviewAction.FOLLOW_UP, next_topic=topic)
+
         return InterviewRoute(action=InterviewAction.END_INTERVIEW)
+
+    def _current_stage_topic(self, session: InterviewSession) -> str | None:
+        """选择当前阶段尚未覆盖、且未达到主题上限的题目方向。"""
+        topics = session.plan.get_stage(session.current_stage).topics
+        for topic in topics:
+            key = self._canonical_topic_key(session, topic)
+            if session.topic_question_counts.get(key, 0) == 0:
+                return topic
+        for topic in topics:
+            key = self._canonical_topic_key(session, topic)
+            if session.topic_question_counts.get(key, 0) < MAX_QUESTIONS_PER_TOPIC:
+                return topic
+        current = (session.current_topic or "").strip()
+        if current:
+            key = self._canonical_topic_key(session, current)
+            if session.topic_question_counts.get(key, 0) < MAX_QUESTIONS_PER_TOPIC:
+                return current
+        return None
+
+    def _next_stage_route(
+        self,
+        session: InterviewSession,
+        next_stage: InterviewStage | None,
+        suggested_topic: str | None = None,
+    ) -> InterviewRoute:
+        if next_stage is None or next_stage == InterviewStage.SUMMARY:
+            return InterviewRoute(action=InterviewAction.NEXT_STAGE)
+        topics = session.plan.get_stage(next_stage).topics
+        # 计划主题是方向约束，模型仍可结合 JD/简历细化具体主题。唯一要
+        # 拦截的是把当前阶段的原主题原样带入下一阶段，避免“换阶段但不换题”。
+        normalized_suggestion = " ".join((suggested_topic or "").split()).casefold()
+        current_topics = {
+            " ".join(topic.split()).casefold()
+            for topic in session.plan.get_stage(session.current_stage).topics
+        }
+        topic = (suggested_topic or "").strip()
+        if not topic or normalized_suggestion in current_topics:
+            topic = topics[0] if topics else next_stage.value
+        return InterviewRoute(action=InterviewAction.NEXT_STAGE, next_topic=topic)
 
     def _next_stage(self, session: InterviewSession) -> InterviewStage | None:
         current_index = self._workflow.stages.index(session.current_stage)
@@ -667,7 +738,10 @@ class InterviewAgentService:
         output: dict[str, object] = {
             "evaluationSummary": turn.evaluation_summary,
             "evaluationScore": turn.score,
+            "strengths": turn.strengths,
+            "weaknesses": turn.weaknesses,
             "currentPrimaryQuestionCount": session.primary_question_count,
+            "totalPrimaryQuestionCount": session.total_primary_question_count,
             "currentFollowupCount": session.followup_count,
             "totalQuestionCount": session.total_question_count,
             "questionBudget": session.target_question_count,

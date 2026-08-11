@@ -23,7 +23,6 @@ export function useInterviewConfig(options?: { defaultResumeId?: string; autoLoa
   const [showMore, setShowMore] = useState(false);
   const [resumeId, setResumeId] = useState<string | undefined>(defaultResumeId);
   const [resumes, setResumes] = useState<ResumeListItem[]>([]);
-  const [questionCount, setQuestionCount] = useState(20);
   const [plannedDuration, setPlannedDuration] = useState(30);
   const [targetRole, setTargetRole] = useState('');
   const [customJdText, setCustomJdText] = useState('');
@@ -81,7 +80,7 @@ export function useInterviewConfig(options?: { defaultResumeId?: string; autoLoa
   return {
     skillId, setSkillId, difficulty, setDifficulty, skills, setSkills, loadingSkills,
     showMore, setShowMore, resumeId, setResumeId, resumes,
-    questionCount, setQuestionCount, plannedDuration, setPlannedDuration,
+    plannedDuration, setPlannedDuration,
     targetRole, setTargetRole,
     customJdText, setCustomJdText, parsedCustomJdText, customCategories,
     parsingJd, jdNeedsReparse, isCustomStartDisabled, isCustomSkill,

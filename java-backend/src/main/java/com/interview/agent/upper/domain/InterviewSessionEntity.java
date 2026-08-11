@@ -24,6 +24,7 @@ public class InterviewSessionEntity {
     private int totalQuestions;
     private int issuedQuestionCount;
     private int primaryQuestionCount;
+    private int totalPrimaryQuestionCount;
     private int followupCount;
     @Enumerated(EnumType.STRING)
     private InterviewSessionStatus status;
@@ -99,9 +100,10 @@ public class InterviewSessionEntity {
         this.updatedAt = Instant.now();
     }
 
-    public void applyCounters(Integer issued, Integer primary, Integer followups) {
+    public void applyCounters(Integer issued, Integer primary, Integer totalPrimary, Integer followups) {
         if (issued != null) this.issuedQuestionCount = issued;
         if (primary != null) this.primaryQuestionCount = primary;
+        if (totalPrimary != null) this.totalPrimaryQuestionCount = totalPrimary;
         if (followups != null) this.followupCount = followups;
     }
 
@@ -122,6 +124,7 @@ public class InterviewSessionEntity {
     public int getTotalQuestions() { return totalQuestions; }
     public int getIssuedQuestionCount() { return issuedQuestionCount; }
     public int getPrimaryQuestionCount() { return primaryQuestionCount; }
+    public int getTotalPrimaryQuestionCount() { return totalPrimaryQuestionCount; }
     public int getFollowupCount() { return followupCount; }
     public String getFinalEvaluationJson() { return finalEvaluationJson; }
     public InterviewSessionStatus getStatus() { return status; }

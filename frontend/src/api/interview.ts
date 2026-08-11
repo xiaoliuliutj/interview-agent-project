@@ -13,6 +13,7 @@ interface InterviewView {
   currentStage: string | null;
   issuedQuestionCount: number;
   primaryQuestionCount: number;
+  totalPrimaryQuestionCount: number;
   followupCount: number;
   finalEvaluation: InterviewSession['finalEvaluation'];
   createdAt: string;
@@ -61,7 +62,6 @@ export const interviewApi = {
       resumeId: input.resumeId,
       targetRole: input.targetRole,
       interviewDurationMinutes: input.interviewDurationMinutes,
-      questionCount: input.questionCount,
       desiredDifficulty: input.difficulty,
       skillId: input.skillId ?? null,
       jdText: input.jdText ?? null,

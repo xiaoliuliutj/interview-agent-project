@@ -9,6 +9,8 @@ import org.apache.fontbox.ttf.TrueTypeCollection;
 import org.apache.fontbox.ttf.TrueTypeFont;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -21,6 +23,7 @@ import java.util.Map;
 /** Renders the candidate-visible interview transcript as a downloadable PDF. */
 @Service
 public class InterviewReportPdfService {
+    private static final Logger log = LoggerFactory.getLogger(InterviewReportPdfService.class);
     private final Path fontPath;
 
     public InterviewReportPdfService(@Value("${agent.pdf-font-path}") String configuredFontPath) {
@@ -30,17 +33,46 @@ public class InterviewReportPdfService {
 
     public byte[] render(String sessionId, String status, int totalQuestions,
                          List<InterviewTurnView> turns, Map<String, Object> finalEvaluation) {
-        Path resolvedFont = resolveFont();
-        if (resolvedFont == null) {
+        List<Path> candidates = fontCandidates();
+        if (candidates.isEmpty()) {
             throw new BusinessException("INTERVIEW_PDF_FONT_REQUIRED",
                     "未找到可用中文字体。请挂载字体文件，或使用包含 fonts-noto-cjk 的服务镜像。");
         }
+        for (Path candidate : candidates) {
+            try {
+                return renderWithFont(candidate, sessionId, status, totalQuestions, turns, finalEvaluation);
+            } catch (IOException error) {
+                log.warn("无法使用 PDF 字体 {}，尝试下一个候选字体", candidate, error);
+            }
+        }
+        throw new BusinessException("INTERVIEW_PDF_EXPORT_FAILED", "unable to generate interview PDF");
+    }
+
+    private List<Path> fontCandidates() {
+        List<Path> candidates = new ArrayList<>();
+        if (fontPath != null && Files.isRegularFile(fontPath)) candidates.add(fontPath);
+        for (Path candidate : List.of(
+                Path.of("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+                Path.of("/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf"),
+                Path.of("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"))) {
+            if (Files.isRegularFile(candidate) && !candidates.contains(candidate)) candidates.add(candidate);
+        }
+        return candidates;
+    }
+
+    private byte[] renderWithFont(Path resolvedFont, String sessionId, String status, int totalQuestions,
+                                  List<InterviewTurnView> turns, Map<String, Object> finalEvaluation) throws IOException {
         TrueTypeCollection collection = null;
         try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             PDType0Font font;
             if (resolvedFont.getFileName().toString().toLowerCase().endsWith(".ttc")) {
                 collection = new TrueTypeCollection(resolvedFont.toFile());
-                TrueTypeFont firstFont = collection.getFontAtIndex(0);
+                List<TrueTypeFont> availableFonts = new ArrayList<>();
+                collection.processAllFonts(availableFonts::add);
+                if (availableFonts.isEmpty()) {
+                    throw new IOException("字体集合中没有可用字体: " + resolvedFont);
+                }
+                TrueTypeFont firstFont = availableFonts.get(0);
                 font = PDType0Font.load(document, firstFont, true);
             } else {
                 font = PDType0Font.load(document, resolvedFont.toFile());
@@ -48,28 +80,9 @@ public class InterviewReportPdfService {
             addPages(document, font, reportLines(sessionId, status, totalQuestions, turns, finalEvaluation));
             document.save(output);
             return output.toByteArray();
-        } catch (IOException error) {
-            throw new BusinessException("INTERVIEW_PDF_EXPORT_FAILED", "unable to generate interview PDF");
         } finally {
-            if (collection != null) {
-                try {
-                    collection.close();
-                } catch (IOException ignored) {
-                    // The PDF bytes have already been produced; closing is best effort.
-                }
-            }
+            if (collection != null) collection.close();
         }
-    }
-
-    private Path resolveFont() {
-        if (fontPath != null && Files.isRegularFile(fontPath)) return fontPath;
-        for (Path candidate : List.of(
-                Path.of("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
-                Path.of("/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf"),
-                Path.of("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"))) {
-            if (Files.isRegularFile(candidate)) return candidate;
-        }
-        return null;
     }
 
     private List<String> reportLines(String sessionId, String status, int totalQuestions,
@@ -78,7 +91,7 @@ public class InterviewReportPdfService {
         lines.add("模拟面试记录");
         lines.add("会话 ID: " + sessionId);
         lines.add("状态: " + status);
-        lines.add("规划题数: " + totalQuestions);
+        lines.add("动态题量安全上限: " + totalQuestions);
         lines.add("");
         int index = 1;
         for (InterviewTurnView turn : turns) {
@@ -86,7 +99,8 @@ public class InterviewReportPdfService {
             lines.add("问题: " + turn.question());
             lines.add("回答: " + (turn.answer() == null ? "" : turn.answer()));
             if (turn.evaluationSummary() != null && !turn.evaluationSummary().isBlank()) {
-                lines.add("回答评估: " + turn.evaluationSummary());
+                lines.add("回答评估: " + turn.evaluationSummary()
+                        + (turn.score() == null ? "" : "（" + turn.score() + " 分）"));
             }
             lines.add("");
         }

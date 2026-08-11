@@ -48,7 +48,6 @@ export default function Layout() {
         interviewConfig: {
           skillId: config.skillId,
           difficulty: config.difficulty,
-          questionCount: config.questionCount,
           targetRole: config.targetRole,
           interviewDurationMinutes: config.plannedDuration,
           jdText: config.jdText,

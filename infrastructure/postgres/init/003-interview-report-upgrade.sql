@@ -8,6 +8,8 @@ ALTER TABLE IF EXISTS interview_sessions
 ALTER TABLE IF EXISTS interview_sessions
     ADD COLUMN IF NOT EXISTS followup_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE IF EXISTS interview_sessions
+    ADD COLUMN IF NOT EXISTS total_primary_question_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE IF EXISTS interview_sessions
     ADD COLUMN IF NOT EXISTS final_evaluation_json TEXT;
 
 ALTER TABLE IF EXISTS interview_turns

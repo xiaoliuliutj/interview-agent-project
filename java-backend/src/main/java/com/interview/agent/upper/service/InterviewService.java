@@ -25,6 +25,7 @@ import java.util.Map;
 /** Text interview application service. All external requests use the single public DTO. */
 @Service
 public class InterviewService {
+    private static final int AGENT_MAX_TOTAL_QUESTIONS = 20;
     private final CandidateRepository candidateRepository;
     private final ResumeRepository resumeRepository;
     private final InterviewSessionPersistenceService sessionPersistence;
@@ -57,7 +58,7 @@ public class InterviewService {
         String sessionId = UUID.randomUUID().toString();
         sessionPersistence.createConfigured(
                 new InterviewSessionEntity(sessionId, userId, candidate.getId(), resume.getId(), null,
-                        request.questionCount()),
+                        AGENT_MAX_TOTAL_QUESTIONS),
                 request.skillId(), difficulty);
 
         String runId = UUID.randomUUID().toString();
@@ -68,7 +69,6 @@ public class InterviewService {
                     new AgentInitializeRequest.CandidateSnapshot(
                             candidate.getId(), resume.getId(), null, resume.getContent(), request.jdText(),
                             request.targetRole(), request.interviewDurationMinutes(), difficulty,
-                            request.questionCount(),
                             request.skillId(), request.customCategories(),
                             knowledgeBases.systemKnowledgeBaseIds(), knowledgeBases.userKnowledgeBaseIds()),
                     Instant.now()));
@@ -201,6 +201,7 @@ public class InterviewService {
                 session.getJdId(), session.getSkillId(), session.getDifficulty(), session.getTotalQuestions(),
                 session.getStatus().name(), session.getAgentStateVersion(), session.getCurrentQuestion(),
                 session.getCurrentStage(), session.getIssuedQuestionCount(), session.getPrimaryQuestionCount(),
+                session.getTotalPrimaryQuestionCount(),
                 session.getFollowupCount(), finalEvaluation,
                 session.getCreatedAt(), session.getUpdatedAt());
     }

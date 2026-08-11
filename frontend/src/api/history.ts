@@ -45,6 +45,7 @@ export interface InterviewItem {
   currentStage: string | null;
   issuedQuestionCount: number;
   primaryQuestionCount: number;
+  totalPrimaryQuestionCount: number;
   followupCount: number;
   finalEvaluation: {
     overallScore?: number;
