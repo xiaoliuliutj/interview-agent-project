@@ -43,3 +43,6 @@ _scratch/*
 
 # Git bundle export artifacts
 *.bundle
+
+# Locally retained knowledge-base image assets
+python-agent/config/rag/sources/java-interview-knowledge-base-assets/
