@@ -9,6 +9,7 @@ import com.interview.agent.upper.agent.dto.AgentCompleteRequest;
 import com.interview.agent.upper.agent.dto.AgentResumeEvaluateRequest;
 import com.interview.agent.upper.agent.dto.AgentResumeMemoryActivationRequest;
 import com.interview.agent.upper.agent.dto.AgentSkillRequest;
+import com.interview.agent.upper.agent.dto.AgentWebFetchRequest;
 
 public interface AgentGateway {
     AgentResponse initialize(AgentInitializeRequest request);
@@ -26,5 +27,7 @@ public interface AgentGateway {
     AgentResponse deleteRag(AgentRagDeleteRequest request);
 
     AgentResponse skills(AgentSkillRequest request);
+
+    AgentResponse fetchWeb(AgentWebFetchRequest request);
 
 }

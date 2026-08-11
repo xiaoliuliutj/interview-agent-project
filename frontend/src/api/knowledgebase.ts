@@ -15,6 +15,10 @@ export interface KnowledgeBaseItem {
   vectorStatus: VectorStatus;
   vectorError: string | null;
   chunkCount: number;
+  sourceUrl?: string | null;
+  sourceTitle?: string | null;
+  sourceFetchedAt?: string | null;
+  sourceHash?: string | null;
 }
 
 export interface KnowledgeBaseStats {
@@ -34,13 +38,33 @@ export interface UploadKnowledgeBaseResponse {
   };
 }
 
+export interface WebFetchResult {
+  url: string;
+  title: string;
+  fetchedAt: string;
+  contentHash: string;
+  markdown: string;
+  contentType: string;
+  characterCount: number;
+}
+
 export const knowledgeBaseApi = {
-  async uploadKnowledgeBase(file: File, name?: string, category?: string): Promise<UploadKnowledgeBaseResponse> {
+  async uploadKnowledgeBase(file: File, name?: string, category?: string, source?: Pick<WebFetchResult, 'url' | 'title' | 'fetchedAt' | 'contentHash'>): Promise<UploadKnowledgeBaseResponse> {
     const formData = new FormData();
     formData.append('file', file);
     if (name) formData.append('name', name);
     if (category) formData.append('category', category);
+    if (source) {
+      formData.append('sourceUrl', source.url);
+      formData.append('sourceTitle', source.title);
+      formData.append('sourceFetchedAt', source.fetchedAt);
+      formData.append('sourceHash', source.contentHash);
+    }
     return request.upload<UploadKnowledgeBaseResponse>('/api/knowledgebase/upload', formData);
+  },
+
+  async fetchWebPage(url: string): Promise<WebFetchResult> {
+    return request.post<WebFetchResult>('/api/tools/web/fetch', {url});
   },
 
   async downloadKnowledgeBase(id: number): Promise<Blob> {

@@ -32,6 +32,14 @@ public class KnowledgeBaseEntity {
     private int chunkCount;
     private Instant createdAt;
     private Instant updatedAt;
+    @Column(name = "source_url", length = 2048)
+    private String sourceUrl;
+    @Column(name = "source_title", length = 500)
+    private String sourceTitle;
+    @Column(name = "source_fetched_at")
+    private Instant sourceFetchedAt;
+    @Column(name = "source_hash", length = 64)
+    private String sourceHash;
 
     protected KnowledgeBaseEntity() {
     }
@@ -101,6 +109,12 @@ public class KnowledgeBaseEntity {
 
     public void updateCategory(String category) { this.category = category; this.updatedAt = Instant.now(); }
     public void attachOriginalBytes(byte[] bytes) { this.originalBytes = bytes; }
+    public void attachWebSource(String url, String title, Instant fetchedAt, String hash) {
+        this.sourceUrl = url;
+        this.sourceTitle = title;
+        this.sourceFetchedAt = fetchedAt;
+        this.sourceHash = hash;
+    }
     public String getId() { return id; }
     public String getOwnerId() { return ownerId; }
     public String getName() { return name; }
@@ -115,4 +129,8 @@ public class KnowledgeBaseEntity {
     public int getChunkCount() { return chunkCount; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
+    public String getSourceUrl() { return sourceUrl; }
+    public String getSourceTitle() { return sourceTitle; }
+    public Instant getSourceFetchedAt() { return sourceFetchedAt; }
+    public String getSourceHash() { return sourceHash; }
 }

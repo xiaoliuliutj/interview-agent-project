@@ -13,5 +13,9 @@ public record KnowledgeBaseView(
         Instant updatedAt,
         String vectorStatus,
         String vectorError,
-        int chunkCount) {
+        int chunkCount,
+        String sourceUrl,
+        String sourceTitle,
+        Instant sourceFetchedAt,
+        String sourceHash) {
 }

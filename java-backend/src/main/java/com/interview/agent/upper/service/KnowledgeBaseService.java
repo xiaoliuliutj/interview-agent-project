@@ -47,6 +47,11 @@ public class KnowledgeBaseService {
     }
 
     public KnowledgeBaseView upload(MultipartFile file, String name, String category, String userId) throws IOException {
+        return upload(file, name, category, userId, null, null, null, null);
+    }
+
+    public KnowledgeBaseView upload(MultipartFile file, String name, String category, String userId,
+            String sourceUrl, String sourceTitle, Instant sourceFetchedAt, String sourceHash) throws IOException {
         String ownerId = identity.require(userId);
         if (file == null || file.isEmpty()) {
             throw new BusinessException("KNOWLEDGE_BASE_FILE_REQUIRED", "knowledge base file must not be empty");
@@ -74,6 +79,9 @@ public class KnowledgeBaseService {
                 originalFilename,
                 file.getSize(), file.getContentType(), content);
         entity.attachOriginalBytes(originalBytes);
+        if (sourceUrl != null && !sourceUrl.isBlank()) {
+            entity.attachWebSource(sourceUrl.strip(), sourceTitle, sourceFetchedAt, sourceHash);
+        }
         entity = repository.save(entity);
         try {
             indexWorker.index(entity.getId(), ownerId);
@@ -189,6 +197,7 @@ public class KnowledgeBaseService {
                 entity.getOriginalFilename(), entity.getFileSize(), entity.getContentType(),
                 entity.getCreatedAt(), entity.getUpdatedAt(),
                 entity.getVectorStatus(), entity.getVectorError(),
-                entity.getChunkCount());
+                entity.getChunkCount(), entity.getSourceUrl(), entity.getSourceTitle(),
+                entity.getSourceFetchedAt(), entity.getSourceHash());
     }
 }

@@ -37,8 +37,18 @@ public class KnowledgeBaseController {
             @RequestPart("file") MultipartFile file,
             @RequestPart(value = "name", required = false) String name,
             @RequestPart(value = "category", required = false) String category,
+            @RequestPart(value = "sourceUrl", required = false) String sourceUrl,
+            @RequestPart(value = "sourceTitle", required = false) String sourceTitle,
+            @RequestPart(value = "sourceFetchedAt", required = false) String sourceFetchedAt,
+            @RequestPart(value = "sourceHash", required = false) String sourceHash,
             @RequestHeader(value = "X-User-Id", required = false) String userId) throws IOException {
-        KnowledgeBaseView view = service.upload(file, name, category, userId);
+        java.time.Instant fetchedAt = null;
+        if (sourceFetchedAt != null && !sourceFetchedAt.isBlank()) {
+            try { fetchedAt = java.time.Instant.parse(sourceFetchedAt); }
+            catch (java.time.DateTimeParseException ignored) { /* provenance is optional */ }
+        }
+        KnowledgeBaseView view = service.upload(file, name, category, userId,
+                sourceUrl, sourceTitle, fetchedAt, sourceHash);
         return ApiResult.success(Map.of(
                 "knowledgeBase", Map.of(
                         "id", view.id(), "name", view.name(), "category", view.category() == null ? "" : view.category(),

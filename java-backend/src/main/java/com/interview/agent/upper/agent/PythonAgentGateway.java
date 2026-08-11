@@ -9,6 +9,7 @@ import com.interview.agent.upper.agent.dto.AgentCompleteRequest;
 import com.interview.agent.upper.agent.dto.AgentResumeEvaluateRequest;
 import com.interview.agent.upper.agent.dto.AgentResumeMemoryActivationRequest;
 import com.interview.agent.upper.agent.dto.AgentSkillRequest;
+import com.interview.agent.upper.agent.dto.AgentWebFetchRequest;
 import com.interview.agent.upper.engineering.reliability.AgentCallExecutor;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
@@ -71,6 +72,11 @@ public class PythonAgentGateway implements AgentGateway {
     @Override
     public AgentResponse skills(AgentSkillRequest request) {
         return callExecutor.execute(() -> post("/v1/agent/skills", request));
+    }
+
+    @Override
+    public AgentResponse fetchWeb(AgentWebFetchRequest request) {
+        return callExecutor.execute(() -> post("/v1/tools/web/fetch", request));
     }
 
     private AgentResponse post(String path, Object request) {

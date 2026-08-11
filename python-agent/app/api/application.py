@@ -16,6 +16,7 @@ from app.agent.memory.service import MemoryService
 from app.agent.rag.models import KnowledgeDocument
 from app.agent.rag.service import RagService
 from app.agent.skills.loader import SkillRegistry
+from app.agent.web_reader import fetch_public_article
 from app.bootstrap import build_interview_agent_service, build_resume_evaluation_agent
 from app.core.contracts import (
     AgentEvaluationRequest,
@@ -27,6 +28,7 @@ from app.core.contracts import (
     AgentResponse,
     AgentSessionCompletionRequest,
     AgentSkillRequest,
+    AgentWebFetchRequest,
     RunStatus,
     SessionStatus,
 )
@@ -221,6 +223,23 @@ def create_app(
             user_id=payload.user_id, session_id=payload.session_id,
             session_status=SessionStatus.ACTIVE, state_version=0,
             answer=json.dumps(output, ensure_ascii=False), output=output, error=None,
+        )
+
+    @app.post("/v1/tools/web/fetch", response_model=AgentResponse)
+    async def fetch_web(payload: AgentWebFetchRequest) -> AgentResponse:
+        """Fetch and extract a single public HTML page for preview/import.
+
+        No page content is executed or fed into system instructions.  The
+        caller receives Markdown plus provenance so the upper layer can ask
+        for an explicit confirmation before indexing it.
+        """
+        document = await fetch_public_article(payload.url)
+        return AgentResponse(
+            api_version=payload.api_version, request_id=payload.request_id,
+            run_id=payload.run_id, code=100, status=RunStatus.COMPLETED,
+            user_id=payload.user_id, session_id=payload.session_id,
+            session_status=SessionStatus.ACTIVE, state_version=0,
+            answer=document.title, output=document.as_dict(), error=None,
         )
 
     @app.exception_handler(RequestValidationError)

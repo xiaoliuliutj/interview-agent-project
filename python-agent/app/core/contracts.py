@@ -63,6 +63,17 @@ class AgentSkillRequest(AgentOperationRequest):
     input_text: str | None = Field(default=None, alias="inputText", min_length=1)
 
 
+class AgentWebFetchRequest(AgentOperationRequest):
+    """Request to read one explicitly supplied public web page.
+
+    The URL is intentionally the only user-controlled input.  The lower layer
+    validates the destination and treats the returned page as untrusted data.
+    """
+
+    operation: Literal["tool.web.fetch"]
+    url: str = Field(min_length=1, max_length=2048)
+
+
 class CandidateSnapshot(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 

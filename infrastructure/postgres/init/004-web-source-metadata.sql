@@ -1,0 +1,4 @@
+ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS source_url VARCHAR(2048);
+ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS source_title VARCHAR(500);
+ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS source_fetched_at TIMESTAMPTZ;
+ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS source_hash VARCHAR(64);

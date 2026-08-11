@@ -9,6 +9,10 @@ spring:
     open-in-view: false
     hibernate:
       ddl-auto: validate
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/web-source-metadata.sql
   data:
     redis:
       url: ${REDIS_URL:redis://localhost:6379}
