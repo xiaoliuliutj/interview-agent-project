@@ -71,6 +71,7 @@ export default function Interview({
   const [messages, setMessages] = useState<Message[]>([]);
   const [answer, setAnswer] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [agentStatus, setAgentStatus] = useState('IDLE');
   const [error, setError] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [showCompleteConfirm, setShowCompleteConfirm] = useState(false);
@@ -83,6 +84,23 @@ export default function Interview({
   const jdText = initialConfig?.jdText;
   const targetRole = initialConfig?.targetRole;
   const interviewDurationMinutes = initialConfig?.interviewDurationMinutes;
+
+  useEffect(() => {
+    if (!isSubmitting || !session) return;
+    let active = true;
+    const poll = async () => {
+      try {
+        const stage = await interviewApi.getAgentStatus(session.sessionId);
+        if (active) setAgentStatus(stage);
+      } catch {
+        // The answer request itself remains authoritative; a transient status
+        // request failure must not interrupt it.
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 1000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [isSubmitting, session?.sessionId]);
 
   // 自动开始面试（恢复已有会话 或 创建新会话）
   useEffect(() => {
@@ -206,6 +224,7 @@ export default function Interview({
     if (!answer.trim() || !session || !currentQuestion) return;
 
     setIsSubmitting(true);
+    setAgentStatus('EVALUATING');
     setError('');
     const submittedAnswer = answer.trim();
     const previous = pendingAnswerSubmissionRef.current;
@@ -253,6 +272,7 @@ export default function Interview({
       console.error(err);
     } finally {
       setIsSubmitting(false);
+      setAgentStatus('IDLE');
     }
   };
 
@@ -260,6 +280,7 @@ export default function Interview({
     if (!session) return;
 
     setIsSubmitting(true);
+    setAgentStatus('SUMMARIZING');
     try {
       await interviewApi.completeInterview(session.sessionId);
       setShowCompleteConfirm(false);
@@ -270,6 +291,7 @@ export default function Interview({
       console.error(err);
     } finally {
       setIsSubmitting(false);
+      setAgentStatus('IDLE');
     }
   };
 
@@ -380,6 +402,7 @@ export default function Interview({
           onAnswerChange={setAnswer}
           onSubmit={handleSubmitAnswer}
           isSubmitting={isSubmitting}
+          agentStatus={agentStatus}
           onShowCompleteConfirm={setShowCompleteConfirm}
         />
       </motion.div>

@@ -10,6 +10,7 @@ from app.agent.memory.service import MemoryService
 from app.agent.rag.embedding import OpenAIEmbeddingProvider
 from app.agent.rag.policy import RagPolicy
 from app.agent.rag.service import RagSearchTool, RagService
+from app.agent.web_search import WebEvidenceTool
 from app.engineering.reliability.policy import RetryPolicy
 from app.engineering.reliability.retry import AsyncRetryExecutor
 from app.engineering.idempotency.policy import IdempotencyPolicy
@@ -67,6 +68,7 @@ def build_interview_agent_service(
         memory_service=build_memory_service(current),
         summary_agent=InterviewSummaryAgent(model, prompt_loader, retry_executor),
         idempotency_policy=IdempotencyPolicy.load(),
+        web_evidence_tool=WebEvidenceTool(),
     )
 
 

@@ -1,6 +1,7 @@
 from collections import deque
 
 import pytest
+from types import SimpleNamespace
 
 from app.agent.interview.models import (
     CandidateProfile,
@@ -122,6 +123,26 @@ class RecordingRagTool:
         ), score=0.9)]
 
 
+class LowScoreRagTool:
+    async def search_for_question_generation(self, query: str, *, knowledge_base_ids: tuple[str, ...]):
+        return [RagSearchResult(chunk=KnowledgeChunk(
+            chunk_id="chunk-low", knowledge_base_id="system-kb", document_id="doc-low",
+            source_name="system.md", chunk_index=0, content="thin local evidence",
+        ), score=0.2)]
+
+
+class RecordingWebEvidenceTool:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def search_for_question_generation(self, topic: str):
+        self.calls.append(topic)
+        return [SimpleNamespace(
+            markdown="# Redis\n\npublic technical evidence", url="https://redis.io/docs",
+            title="Redis docs", fetched_at="2026-08-12T00:00:00Z", content_hash="hash",
+        )]
+
+
 def build_plan() -> InterviewPlan:
     return InterviewPlan(
         candidate_summary="测试候选人", strategy_summary="测试计划",
@@ -144,7 +165,7 @@ def evaluation(score: int = 80, summary: str = "回答完整") -> InterviewEvalu
     )
 
 
-def build_service(repository, evaluations, routes, events, rag_tool=None):
+def build_service(repository, evaluations, routes, events, rag_tool=None, web_evidence_tool=None):
     prompt_loader = PromptLoader()
     memory_service = MemoryService(
         InMemoryLongTermMemoryRepository(),
@@ -156,6 +177,7 @@ def build_service(repository, evaluations, routes, events, rag_tool=None):
     service = InterviewAgentService(
         StaticPlanner(), evaluation_agent, routing_agent, question_agent, rag_tool,
         repository, InterviewWorkflow.load(prompt_loader), prompt_loader, memory_service,
+        web_evidence_tool=web_evidence_tool,
     )
     return service, evaluation_agent, routing_agent, question_agent
 
@@ -435,3 +457,38 @@ async def test_rag_runs_only_after_routing_and_reuses_evidence_cache_for_same_to
     assert events == ["evaluate", "route", "rag", "question", "evaluate", "route", "question"]
     assert rag_tool.calls == [("Redis 缓存一致性", ("system-kb", "user-kb"))]
     assert evaluator.evidence_seen == [[], [{"content": "retrieved material", "score": 0.9, "knowledgeBaseId": "system-kb"}]]
+
+
+@pytest.mark.asyncio
+async def test_insufficient_rag_falls_back_to_web_and_caches_result() -> None:
+    repository, events = InMemorySessionRepository(), []
+    web_tool = RecordingWebEvidenceTool()
+    service, _, _, _ = build_service(
+        repository, [evaluation()], [], events, LowScoreRagTool(), web_tool
+    )
+    profile = build_profile().model_copy(update={"system_knowledge_base_ids": ["system-kb"]})
+    session = await service.initialize_session(user_id="user-1", session_id="session-web", profile=profile)
+    route = InterviewRoute(action=InterviewAction.NEXT_STAGE, next_topic="Redis caching")
+
+    first = await service._question_evidence(session, route)
+    second = await service._question_evidence(session, route)
+
+    assert web_tool.calls == ["Redis caching"]
+    assert first == second
+    assert first[-1]["sourceType"] == "WEB"
+    assert first[-1]["sourceUrl"] == "https://redis.io/docs"
+
+
+@pytest.mark.asyncio
+async def test_completion_clears_session_evidence_cache() -> None:
+    repository, events = InMemorySessionRepository(), []
+    service, _, _, _ = build_service(repository, [evaluation()], [], events)
+    session = await service.initialize_session(user_id="user-1", session_id="session-cache", profile=build_profile())
+    session.rag_evidence_cache["topic"] = [{"content": "temporary"}]
+    await repository.save(session, expected_version=0)
+
+    completed = await service.complete_session(
+        user_id="user-1", session_id="session-cache", expected_session_status=SessionStatus.ACTIVE,
+        expected_state_version=1,
+    )
+    assert completed.rag_evidence_cache == {}

@@ -86,6 +86,11 @@ export const interviewApi = {
     return { session, hasNextQuestion: nextQuestion !== null, nextQuestion };
   },
 
+  async getAgentStatus(sessionId: string): Promise<string> {
+    const result = await request.get<{stage?: string}>(`/api/interviews/${sessionId}/agent-status`, {timeout: 5000});
+    return result.stage || 'IDLE';
+  },
+
   async completeInterview(sessionId: string): Promise<void> {
     await request.post<void>(`/api/interviews/${sessionId}/complete`);
   },

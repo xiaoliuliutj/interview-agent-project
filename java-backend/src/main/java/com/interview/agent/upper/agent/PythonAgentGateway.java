@@ -19,6 +19,7 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.util.Set;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @Component
@@ -77,6 +78,19 @@ public class PythonAgentGateway implements AgentGateway {
     @Override
     public AgentResponse fetchWeb(AgentWebFetchRequest request) {
         return callExecutor.execute(() -> post("/v1/tools/web/fetch", request));
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> sessionProgress(String sessionId) {
+        try {
+            Map<String, Object> response = restClient.get()
+                    .uri("/v1/agent/sessions/{sessionId}/progress", sessionId)
+                    .retrieve().body(Map.class);
+            return response == null ? Map.of("stage", "IDLE") : response;
+        } catch (RestClientException error) {
+            return Map.of("stage", "IDLE");
+        }
     }
 
     private AgentResponse post(String path, Object request) {

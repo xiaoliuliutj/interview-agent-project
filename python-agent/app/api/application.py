@@ -53,6 +53,12 @@ def create_app(
     async def health() -> dict[str, str]:
         return {"status": "UP"}
 
+    @app.get("/v1/agent/sessions/{session_id}/progress")
+    async def session_progress(session_id: str, request: Request) -> dict[str, str]:
+        service = _resolve_service(request)
+        progress = getattr(service, "progress_for", None)
+        return {"stage": progress(session_id) if callable(progress) else "IDLE"}
+
     @app.post("/v1/agent/sessions/initialize", response_model=AgentResponse)
     async def initialize_session(payload: AgentInitializationRequest, request: Request) -> AgentResponse:
         session = await _resolve_service(request).initialize_session(

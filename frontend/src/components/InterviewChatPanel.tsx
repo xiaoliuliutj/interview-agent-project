@@ -20,8 +20,21 @@ interface InterviewChatPanelProps {
   onAnswerChange: (answer: string) => void;
   onSubmit: () => void;
   isSubmitting: boolean;
+  agentStatus?: string;
   onShowCompleteConfirm: (show: boolean) => void;
 }
+
+const agentStatusLabel: Record<string, string> = {
+  EVALUATING: '评估回答中',
+  ROUTING: '规划下一步中',
+  CACHE_LOOKUP: '查询会话缓存中',
+  RAG_RETRIEVING: '检索知识库中',
+  WEB_RETRIEVING: '检索公开技术资料中',
+  GENERATING_QUESTION: '生成下一题中',
+  SUMMARIZING: '生成面试评估中',
+  COMPLETED: '已完成',
+  IDLE: '准备处理',
+};
 
 /**
  * 面试聊天面板组件
@@ -34,6 +47,7 @@ export default function InterviewChatPanel({
   onAnswerChange,
   onSubmit,
   isSubmitting,
+  agentStatus,
   onShowCompleteConfirm
 }: InterviewChatPanelProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
@@ -77,6 +91,11 @@ export default function InterviewChatPanel({
         <p className="mt-2 text-xs text-slate-400 dark:text-slate-500">
           实际题量由 Agent 根据每轮回答质量、阶段覆盖和剩余预算动态决定，不要求问满上限。
         </p>
+        {isSubmitting && (
+          <p className="mt-3 text-sm font-medium text-primary-600 dark:text-primary-400" role="status">
+            Agent 状态：{agentStatusLabel[agentStatus || 'IDLE'] || '处理中'}
+          </p>
+        )}
       </div>
 
       {/* 聊天区域 */}
@@ -126,7 +145,7 @@ export default function InterviewChatPanel({
                       animate={{ rotate: 360 }}
                       transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
                     />
-                    提交中
+                    {agentStatusLabel[agentStatus || 'IDLE'] || '处理中'}
                   </>
                 ) : (
                   <>

@@ -11,6 +11,7 @@ import com.interview.agent.upper.service.BusinessException;
 import com.interview.agent.upper.service.InterviewService;
 import com.interview.agent.upper.service.InterviewReportPdfService;
 import com.interview.agent.upper.service.UserIdentityResolver;
+import com.interview.agent.upper.agent.AgentGateway;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -34,12 +35,14 @@ public class InterviewController {
     private final InterviewService interviewService;
     private final UserIdentityResolver identity;
     private final InterviewReportPdfService reportPdfService;
+    private final AgentGateway agentGateway;
 
     public InterviewController(InterviewService interviewService, UserIdentityResolver identity,
-                               InterviewReportPdfService reportPdfService) {
+                               InterviewReportPdfService reportPdfService, AgentGateway agentGateway) {
         this.interviewService = interviewService;
         this.identity = identity;
         this.reportPdfService = reportPdfService;
+        this.agentGateway = agentGateway;
     }
 
     @PostMapping
@@ -58,6 +61,14 @@ public class InterviewController {
     public ApiResult<InterviewDetailView> get(@PathVariable String sessionId,
                                                @RequestHeader(value = "X-User-Id", required = false) String userId) {
         return ApiResult.success(detail(sessionId, identity.require(userId)));
+    }
+
+    @GetMapping("/{sessionId}/agent-status")
+    public ApiResult<java.util.Map<String, Object>> agentStatus(
+            @PathVariable String sessionId,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        detail(sessionId, identity.require(userId));
+        return ApiResult.success(agentGateway.sessionProgress(sessionId));
     }
 
     @GetMapping("/unfinished/{resumeId}")

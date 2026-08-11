@@ -10,6 +10,7 @@ import com.interview.agent.upper.agent.dto.AgentResumeEvaluateRequest;
 import com.interview.agent.upper.agent.dto.AgentResumeMemoryActivationRequest;
 import com.interview.agent.upper.agent.dto.AgentSkillRequest;
 import com.interview.agent.upper.agent.dto.AgentWebFetchRequest;
+import java.util.Map;
 
 public interface AgentGateway {
     AgentResponse initialize(AgentInitializeRequest request);
@@ -29,5 +30,7 @@ public interface AgentGateway {
     AgentResponse skills(AgentSkillRequest request);
 
     AgentResponse fetchWeb(AgentWebFetchRequest request);
+
+    Map<String, Object> sessionProgress(String sessionId);
 
 }

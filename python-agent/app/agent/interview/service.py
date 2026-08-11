@@ -5,6 +5,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from collections.abc import Awaitable, Callable
 
 from app.agent.memory.service import MemoryService
 from app.core.exceptions import AgentDependencyError, ConsistencyError
@@ -20,6 +21,7 @@ from .agent import (
     InterviewSummaryAgent,
 )
 from app.agent.rag.service import RagSearchTool
+from app.agent.web_search import WebEvidenceTool
 from .models import (
     AgentRunSnapshot,
     CandidateProfile,
@@ -65,6 +67,7 @@ class InterviewAgentService:
         memory_service: MemoryService,
         summary_agent: InterviewSummaryAgent | None = None,
         idempotency_policy: IdempotencyPolicy | None = None,
+        web_evidence_tool: WebEvidenceTool | None = None,
     ) -> None:
         self._planner = planner
         self._evaluation_agent = evaluation_agent
@@ -77,6 +80,22 @@ class InterviewAgentService:
         self._memory_service = memory_service
         self._summary_agent = summary_agent
         self._idempotency_policy = idempotency_policy or IdempotencyPolicy(100)
+        self._web_evidence_tool = web_evidence_tool
+        self._progress: dict[str, str] = {}
+        self._progress_reporter: Callable[[str, str], Awaitable[None]] | None = None
+
+    def set_progress_reporter(
+        self, reporter: Callable[[str, str], Awaitable[None]] | None
+    ) -> None:
+        self._progress_reporter = reporter
+
+    def progress_for(self, session_id: str) -> str:
+        return self._progress.get(session_id, "IDLE")
+
+    async def _report_progress(self, session_id: str, stage: str) -> None:
+        self._progress[session_id] = stage
+        if self._progress_reporter is not None:
+            await self._progress_reporter(session_id, stage)
 
     async def initialize_session(
         self,
@@ -157,6 +176,7 @@ class InterviewAgentService:
         )
 
         expected_version = session.state_version
+        await self._report_progress(session_id, "SUMMARIZING")
         session.status = SessionStatus.COMPLETED
         session.final_summary = session.final_summary or self._fallback_summary(
             session, interrupted=False
@@ -171,8 +191,10 @@ class InterviewAgentService:
         session.final_evaluation = session.final_evaluation or self._fallback_evaluation(session)
         session.final_summary = session.final_evaluation.summary
         session.updated_at = datetime.now(timezone.utc)
+        session.rag_evidence_cache.clear()
         saved = await self._repository.save(session, expected_version=expected_version)
         await self._memory_service.finalize_session(session=saved, interrupted=False)
+        await self._report_progress(session_id, "COMPLETED")
         return saved
 
     async def pause_session(
@@ -253,6 +275,7 @@ class InterviewAgentService:
 
         expected_version = session.state_version
         memory_context = await self._memory_service.build_context(session)
+        await self._report_progress(session_id, "EVALUATING")
         evaluation = await self._evaluation_agent.evaluate(
             session,
             candidate_answer,
@@ -262,6 +285,7 @@ class InterviewAgentService:
             await self._replan_after_opening(session, candidate_answer)
         allowed_actions = self._allowed_actions(session, evaluation)
         next_stage = self._next_stage(session)
+        await self._report_progress(session_id, "ROUTING")
         route = await self._routing_agent.route(
             session,
             evaluation,
@@ -280,6 +304,7 @@ class InterviewAgentService:
         # a durable memory entry for a turn the session never accepted.
         next_question_memory_context = await self._memory_service.build_context(session)
         if session.status == SessionStatus.COMPLETED:
+            await self._report_progress(session_id, "SUMMARIZING")
             session.final_summary = self._fallback_summary(session, interrupted=False)
             if self._summary_agent is not None and session.turns:
                 try:
@@ -296,6 +321,7 @@ class InterviewAgentService:
                     "模型在需要出题的路由中未返回 nextTopic", retryable=False
                 )
             evidence = await self._question_evidence(session, route)
+            await self._report_progress(session_id, "GENERATING_QUESTION")
             session.current_question = await self._question_agent.generate(
                 session, route, evidence, next_question_memory_context
             )
@@ -326,6 +352,7 @@ class InterviewAgentService:
             await self._memory_service.finalize_session(
                 session=saved, interrupted=saved.status == SessionStatus.FAILED
             )
+        await self._report_progress(session_id, "COMPLETED" if saved.status == SessionStatus.COMPLETED else "IDLE")
         return AgentSubmissionResult(session=saved, snapshot=snapshot)
 
     @staticmethod
@@ -689,22 +716,36 @@ class InterviewAgentService:
             raise AgentDependencyError("RAG 出题缺少已确定的题目方向", retryable=False)
         topic = route.next_topic
         ids = tuple(dict.fromkeys([*session.system_knowledge_base_ids, *session.user_knowledge_base_ids]))
-        if not ids or self._rag_tool is None:
-            return []
         cache_key = self._evidence_cache_key(
             stage=session.current_stage,
             topic=topic,
             knowledge_base_ids=ids,
         )
+        await self._report_progress(session.session_id, "CACHE_LOOKUP")
         cached = session.rag_evidence_cache.get(cache_key)
         if cached is not None:
             # Keep the persisted cache isolated from downstream prompt code.
             return [dict(item) for item in cached]
-        results = await self._rag_tool.search_for_question_generation(
-            topic, knowledge_base_ids=ids
-        )
+        results = []
+        if ids and self._rag_tool is not None:
+            await self._report_progress(session.session_id, "RAG_RETRIEVING")
+            results = await self._rag_tool.search_for_question_generation(
+                topic, knowledge_base_ids=ids
+            )
         evidence = [{"content": item.chunk.content, "score": item.score,
                      "knowledgeBaseId": item.chunk.knowledge_base_id} for item in results]
+        if self._evidence_is_insufficient(evidence) and self._web_evidence_tool is not None:
+            await self._report_progress(session.session_id, "WEB_RETRIEVING")
+            documents = await self._web_evidence_tool.search_for_question_generation(topic)
+            evidence.extend({
+                "content": document.markdown,
+                "score": 0.0,
+                "sourceType": "WEB",
+                "sourceUrl": document.url,
+                "sourceTitle": document.title,
+                "sourceFetchedAt": document.fetched_at,
+                "contentHash": document.content_hash,
+            } for document in documents)
         session.rag_evidence_cache[cache_key] = evidence
         return [dict(item) for item in evidence]
 
@@ -719,12 +760,19 @@ class InterviewAgentService:
         return "|".join([stage.value, normalized_topic, *sorted(knowledge_base_ids)])
 
     @staticmethod
+    def _evidence_is_insufficient(evidence: list[dict[str, object]]) -> bool:
+        """Require at least two relevant local chunks before skipping web lookup."""
+        local = [item for item in evidence if item.get("sourceType", "RAG") == "RAG"]
+        return len(local) < 2 or max((float(item.get("score", 0.0)) for item in local), default=0.0) < 0.5
+
+    @staticmethod
     def _complete(session: InterviewSession) -> None:
         session.current_stage = InterviewStage.SUMMARY
         session.status = SessionStatus.COMPLETED
         session.final_summary = None
         session.current_question = ""
         session.current_question_evidence = []
+        session.rag_evidence_cache.clear()
 
     @staticmethod
     def _candidate_visible_output(

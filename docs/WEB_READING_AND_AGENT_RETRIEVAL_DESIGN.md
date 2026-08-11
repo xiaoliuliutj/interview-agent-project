@@ -38,6 +38,14 @@ Each interview session owns a short-lived evidence cache. The lookup order is:
 
 Web evidence is cached in the same session cache with `sourceType=WEB`. It is used for the current question and later turns, but the cache is cleared when the interview is completed or deleted. Long-term memory and persisted knowledge-base documents are not cleared by this operation.
 
+### Implemented policy
+
+- Cache keys are scoped by interview stage, normalized topic, and selected knowledge-base IDs.
+- A cache hit is reused without another embedding or web request.
+- Local RAG is considered sufficient only with at least two chunks and a best score of `0.5` or higher; otherwise the Agent searches up to two allowlisted technical-documentation pages.
+- Automatic web retrieval accepts only official/technical documentation domains, performs the same URL, DNS, redirect, size, and HTML checks as manual imports, and degrades to normal RAG when search or fetching fails.
+- Web content is explicitly labelled untrusted evidence before question generation. It is reference material only and cannot provide instructions or cause tool use.
+
 ## Progress states
 
 The upper API exposes a progress phase for the current answer submission. The UI renders at least:
@@ -45,6 +53,8 @@ The upper API exposes a progress phase for the current answer submission. The UI
 `评估中 → 路由中 → 缓存检索中 → RAG 检索中 → 网页检索中 → 出题中`
 
 The phase is operational feedback only; routing and completion limits remain enforced by the lower Agent state machine.
+
+The Python Agent now stores the live phase per active session and exposes it through `GET /v1/agent/sessions/{sessionId}/progress`. The Java API proxies this as `GET /api/interviews/{sessionId}/agent-status`; the frontend polls it only while an answer or completion request is in progress.
 
 ## Persistence
 
