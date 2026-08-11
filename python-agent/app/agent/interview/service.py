@@ -738,7 +738,9 @@ class InterviewAgentService:
             await self._report_progress(session.session_id, "WEB_RETRIEVING")
             documents = await self._web_evidence_tool.search_for_question_generation(topic)
             evidence.extend({
-                "content": document.markdown,
+                # Keep web evidence bounded for the question prompt. The full
+                # Markdown remains available through the explicit KB import.
+                "content": document.markdown[:12000],
                 "score": 0.0,
                 "sourceType": "WEB",
                 "sourceUrl": document.url,
