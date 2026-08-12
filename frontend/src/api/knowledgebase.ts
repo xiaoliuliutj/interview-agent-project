@@ -48,6 +48,31 @@ export interface WebFetchResult {
   characterCount: number;
 }
 
+export interface WebCrawlPage extends WebFetchResult {
+  id: string;
+  depth: number;
+  parentUrl: string | null;
+  filename: string;
+}
+
+export interface WebCrawlResult {
+  previewToken: string;
+  expiresAt: string;
+  entryUrl: string;
+  status: 'COMPLETED' | 'PARTIAL_COMPLETED';
+  stopReason: string | null;
+  validPageCount: number;
+  rejectedCount: number;
+  pages: WebCrawlPage[];
+  rejected: Array<{url: string; reason: string}>;
+  archiveMarkdown: string;
+}
+
+export interface WebCrawlImportResult {
+  importedCount: number;
+  knowledgeBases: Array<{id: number; name: string; filename: string; vectorStatus: VectorStatus}>;
+}
+
 export const knowledgeBaseApi = {
   async uploadKnowledgeBase(file: File, name?: string, category?: string, source?: Pick<WebFetchResult, 'url' | 'title' | 'fetchedAt' | 'contentHash'>): Promise<UploadKnowledgeBaseResponse> {
     const formData = new FormData();
@@ -65,6 +90,24 @@ export const knowledgeBaseApi = {
 
   async fetchWebPage(url: string): Promise<WebFetchResult> {
     return request.post<WebFetchResult>('/api/tools/web/fetch', {url});
+  },
+
+  async crawlWebSite(url: string, topic?: string): Promise<WebCrawlResult> {
+    return request.post<WebCrawlResult>('/api/tools/web/crawl', {url, topic}, {timeout: 660000});
+  },
+
+  async importWebCrawl(previewToken: string, selectedPageIds: string[], category?: string): Promise<WebCrawlImportResult> {
+    return request.post<WebCrawlImportResult>('/api/tools/web/crawl/import', {
+      previewToken, selectedPageIds, category,
+    }, {timeout: 300000});
+  },
+
+  async downloadWebCrawlArchive(previewToken: string): Promise<Blob> {
+    const response = await request.getInstance().get(
+      `/api/tools/web/crawl/${encodeURIComponent(previewToken)}/archive`,
+      {responseType: 'blob', skipResultTransform: true} as never,
+    );
+    return response.data;
   },
 
   async downloadKnowledgeBase(id: number): Promise<Blob> {

@@ -146,4 +146,8 @@ def _few_shot_output(schema: type[BaseModel]) -> dict[str, Any]:
         "GeneratedQuestion": {"question": "请说明线程池核心参数及其作用。"},
         "InterviewSummary": {"overallScore": 76, "summary": "整体基础扎实，工程细节可继续加强。", "strengths": ["基础概念准确"], "weaknesses": ["场景分析不足"], "suggestions": ["补充项目指标与取舍"],},
     }
+    if schema.__name__ == "CrawlPageDecision":
+        return {"pageType": "CONTENT", "includeAsKnowledge": True,
+                "expandLinks": False, "relevanceScore": 85,
+                "reason": "rich technical content", "selectedLinks": []}
     return examples.get(schema.__name__, {})

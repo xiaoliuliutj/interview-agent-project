@@ -10,6 +10,7 @@ import com.interview.agent.upper.agent.dto.AgentResumeEvaluateRequest;
 import com.interview.agent.upper.agent.dto.AgentResumeMemoryActivationRequest;
 import com.interview.agent.upper.agent.dto.AgentSkillRequest;
 import com.interview.agent.upper.agent.dto.AgentWebFetchRequest;
+import com.interview.agent.upper.agent.dto.AgentWebCrawlRequest;
 import com.interview.agent.upper.engineering.reliability.AgentCallExecutor;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
@@ -81,6 +82,11 @@ public class PythonAgentGateway implements AgentGateway {
     }
 
     @Override
+    public AgentResponse crawlWeb(AgentWebCrawlRequest request) {
+        return callExecutor.execute(() -> post("/v1/tools/web/crawl", request));
+    }
+
+    @Override
     @SuppressWarnings("unchecked")
     public Map<String, Object> sessionProgress(String sessionId) {
         try {
@@ -89,7 +95,10 @@ public class PythonAgentGateway implements AgentGateway {
                     .retrieve().body(Map.class);
             return response == null ? Map.of("stage", "IDLE") : response;
         } catch (RestClientException error) {
-            return Map.of("stage", "IDLE");
+            // Do not disguise a failed progress probe as a healthy idle Agent.
+            // The answer request remains authoritative, while the UI can now
+            // explain that live progress is temporarily unavailable.
+            return Map.of("stage", "STATUS_UNAVAILABLE");
         }
     }
 

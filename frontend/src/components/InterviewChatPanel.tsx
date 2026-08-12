@@ -33,7 +33,9 @@ const agentStatusLabel: Record<string, string> = {
   GENERATING_QUESTION: '生成下一题中',
   SUMMARIZING: '生成面试评估中',
   COMPLETED: '已完成',
-  IDLE: '准备处理',
+  FAILED: '处理失败，请重试',
+  STATUS_UNAVAILABLE: '状态连接异常，仍在等待主请求',
+  IDLE: '请求排队中',
 };
 
 /**

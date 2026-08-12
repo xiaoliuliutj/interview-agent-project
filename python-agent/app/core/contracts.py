@@ -74,6 +74,12 @@ class AgentWebFetchRequest(AgentOperationRequest):
     url: str = Field(min_length=1, max_length=2048)
 
 
+class AgentWebCrawlRequest(AgentOperationRequest):
+    operation: Literal["tool.web.crawl"]
+    url: str = Field(min_length=1, max_length=2048)
+    topic: str | None = Field(default=None, max_length=500)
+
+
 class CandidateSnapshot(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 

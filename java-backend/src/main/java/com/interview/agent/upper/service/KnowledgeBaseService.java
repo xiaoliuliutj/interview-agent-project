@@ -60,7 +60,6 @@ public class KnowledgeBaseService {
         if (originalFilename == null || originalFilename.isBlank()) {
             throw new BusinessException("KNOWLEDGE_BASE_FILENAME_REQUIRED", "knowledge base filename is required");
         }
-        String id = idGenerator.next();
         String content;
         try {
             // Plain-text and Markdown are already knowledge documents. Parsing
@@ -78,12 +77,36 @@ public class KnowledgeBaseService {
         }
         String resolvedName = name == null || name.isBlank() ? originalFilename : name.strip();
         byte[] originalBytes = file.getBytes();
+        return persistDocument(ownerId, resolvedName, category, originalFilename,
+                file.getContentType(), content, originalBytes,
+                sourceUrl, sourceTitle, sourceFetchedAt, sourceHash);
+    }
+
+    public KnowledgeBaseView uploadMarkdown(String filename, String name, String category, String userId,
+            String markdown, String sourceUrl, String sourceTitle, Instant sourceFetchedAt, String sourceHash) {
+        String ownerId = identity.require(userId);
+        if (filename == null || filename.isBlank()) {
+            throw new BusinessException("KNOWLEDGE_BASE_FILENAME_REQUIRED", "knowledge base filename is required");
+        }
+        if (markdown == null || markdown.isBlank()) {
+            throw new BusinessException("KNOWLEDGE_BASE_CONTENT_EMPTY", "knowledge base text must not be empty");
+        }
+        byte[] originalBytes = markdown.getBytes(StandardCharsets.UTF_8);
+        String resolvedName = name == null || name.isBlank() ? filename : name.strip();
+        return persistDocument(ownerId, resolvedName, category, filename, "text/markdown",
+                markdown, originalBytes, sourceUrl, sourceTitle, sourceFetchedAt, sourceHash);
+    }
+
+    private KnowledgeBaseView persistDocument(String ownerId, String resolvedName, String category,
+            String originalFilename, String contentType, String content, byte[] originalBytes,
+            String sourceUrl, String sourceTitle, Instant sourceFetchedAt, String sourceHash) {
+        String id = idGenerator.next();
         KnowledgeBaseEntity entity = new KnowledgeBaseEntity(
                 id, ownerId,
                 resolvedName,
                 category,
                 originalFilename,
-                file.getSize(), file.getContentType(), content);
+                originalBytes.length, contentType, content);
         entity.attachOriginalBytes(originalBytes);
         if (sourceUrl != null && !sourceUrl.isBlank()) {
             entity.attachWebSource(sourceUrl.strip(), sourceTitle, sourceFetchedAt, sourceHash);

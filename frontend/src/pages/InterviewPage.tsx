@@ -91,10 +91,12 @@ export default function Interview({
     const poll = async () => {
       try {
         const stage = await interviewApi.getAgentStatus(session.sessionId);
-        if (active) setAgentStatus(stage);
+        // The progress request can race ahead of the answer request and see
+        // the previous IDLE state. Never let that stale observation overwrite
+        // the active phase already shown after the user clicked submit.
+        if (active && stage !== 'IDLE') setAgentStatus(stage);
       } catch {
-        // The answer request itself remains authoritative; a transient status
-        // request failure must not interrupt it.
+        if (active) setAgentStatus('STATUS_UNAVAILABLE');
       }
     };
     void poll();
@@ -268,7 +270,7 @@ export default function Interview({
       // 网络重试还是幂等重放，旧问题、用户回答、逐轮评估和下一题都不会丢失。
       initSession(response.session);
     } catch (err) {
-      setError('提交答案失败，请重试');
+      setError(err instanceof Error ? `提交答案失败：${err.message}` : '提交答案失败，请重试');
       console.error(err);
     } finally {
       setIsSubmitting(false);
@@ -394,6 +396,11 @@ export default function Interview({
         animate={{ opacity: 1 }}
         transition={{ duration: 0.3 }}
       >
+        {error && (
+          <div className="mx-auto mb-4 max-w-4xl rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300" role="alert">
+            {error}。你的回答已保留，可直接再次提交；系统会复用同一个请求编号，避免重复记录。
+          </div>
+        )}
         <InterviewChatPanel
           session={session}
           currentQuestion={currentQuestion}

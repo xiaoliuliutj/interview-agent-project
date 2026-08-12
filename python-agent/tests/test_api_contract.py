@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import httpx
@@ -15,6 +16,13 @@ class FakeInterviewAgentService:
     def __init__(self) -> None:
         self.initialized_profile = None
         self.submitted_answer = None
+        self.failed_progress_session = None
+
+    def progress_for(self, session_id):
+        return "FAILED" if self.failed_progress_session == session_id else "IDLE"
+
+    def mark_progress_failed(self, session_id):
+        self.failed_progress_session = session_id
 
     async def initialize_session(self, *, user_id, session_id, profile, run_id=None):
         self.initialized_profile = profile
@@ -123,7 +131,7 @@ class FakeResumeMemoryService:
 @pytest.mark.asyncio
 async def test_initialize_endpoint_returns_standard_response() -> None:
     service = FakeInterviewAgentService()
-    transport = httpx.ASGITransport(app=create_app(service))
+    transport = httpx.ASGITransport(app=create_app(service), raise_app_exceptions=False)
     payload = {
         "apiVersion": "v1",
         "requestId": "req-1",
@@ -195,7 +203,7 @@ async def test_validation_error_uses_same_standard_response_shape() -> None:
 @pytest.mark.asyncio
 async def test_respond_endpoint_returns_only_candidate_visible_evaluation() -> None:
     service = FakeInterviewAgentService()
-    transport = httpx.ASGITransport(app=create_app(service))
+    transport = httpx.ASGITransport(app=create_app(service), raise_app_exceptions=False)
     payload = {
         "apiVersion": "v1",
         "requestId": "req-answer",
@@ -237,6 +245,53 @@ async def test_respond_endpoint_rejects_question_field_instead_of_answer() -> No
 
     assert response.status_code == 400
     assert response.json()["code"] == 200
+
+
+@pytest.mark.asyncio
+async def test_failed_respond_remains_visible_in_progress_endpoint() -> None:
+    service = FakeInterviewAgentService()
+    async def fail(**kwargs):
+        raise RuntimeError("model unavailable")
+    service.submit_answer_for_run = fail
+    transport = httpx.ASGITransport(
+        app=create_app(service), raise_app_exceptions=False
+    )
+    payload = {
+        "apiVersion": "v1", "requestId": "req-fail", "runId": "run-fail",
+        "userId": "user-1", "sessionId": "session-fail", "operation": "agent.respond",
+        "sessionStatus": "ACTIVE", "stateVersion": 0, "answer": "answer",
+        "timestamp": REQUEST_TIMESTAMP,
+    }
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/v1/agent/respond", json=payload)
+        progress = await client.get("/v1/agent/sessions/session-fail/progress")
+
+    assert response.status_code == 500
+    assert progress.json() == {"stage": "FAILED"}
+
+
+@pytest.mark.asyncio
+async def test_respond_has_a_non_retryable_interactive_deadline(monkeypatch) -> None:
+    service = FakeInterviewAgentService()
+    async def hang(**kwargs):
+        await asyncio.sleep(10)
+    service.submit_answer_for_run = hang
+    monkeypatch.setattr("app.api.application.INTERVIEW_TURN_TIMEOUT_SECONDS", 0.01)
+    transport = httpx.ASGITransport(app=create_app(service), raise_app_exceptions=False)
+    payload = {
+        "apiVersion": "v1", "requestId": "req-timeout", "runId": "run-timeout",
+        "userId": "user-1", "sessionId": "session-timeout", "operation": "agent.respond",
+        "sessionStatus": "ACTIVE", "stateVersion": 0, "answer": "answer",
+        "timestamp": REQUEST_TIMESTAMP,
+    }
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/v1/agent/respond", json=payload)
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["status"] == "FAILED"
+    assert body["error"]["retryable"] is False
+    assert service.progress_for("session-timeout") == "FAILED"
 
 
 @pytest.mark.asyncio

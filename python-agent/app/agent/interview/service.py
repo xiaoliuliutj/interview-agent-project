@@ -1,5 +1,6 @@
 """面试 Agent 规划、记忆、幂等和受约束流程推进。"""
 
+import asyncio
 import logging
 import hashlib
 import json
@@ -43,6 +44,9 @@ from .workflow import InterviewWorkflow
 
 
 logger = logging.getLogger(__name__)
+
+INTERVIEW_RAG_TIMEOUT_SECONDS = 30.0
+INTERVIEW_WEB_TIMEOUT_SECONDS = 15.0
 
 
 @dataclass(frozen=True)
@@ -91,6 +95,11 @@ class InterviewAgentService:
 
     def progress_for(self, session_id: str) -> str:
         return self._progress.get(session_id, "IDLE")
+
+    def mark_progress_failed(self, session_id: str) -> None:
+        """Keep a failed run observable instead of reporting a false idle state."""
+        if session_id:
+            self._progress[session_id] = "FAILED"
 
     async def _report_progress(self, session_id: str, stage: str) -> None:
         self._progress[session_id] = stage
@@ -729,14 +738,41 @@ class InterviewAgentService:
         results = []
         if ids and self._rag_tool is not None:
             await self._report_progress(session.session_id, "RAG_RETRIEVING")
-            results = await self._rag_tool.search_for_question_generation(
-                topic, knowledge_base_ids=ids
-            )
+            try:
+                results = await asyncio.wait_for(
+                    self._rag_tool.search_for_question_generation(
+                        topic, knowledge_base_ids=ids
+                    ),
+                    timeout=INTERVIEW_RAG_TIMEOUT_SECONDS,
+                )
+            except Exception as error:
+                # Evidence enrichment is optional. A broken embedding provider
+                # or slow vector store must not freeze the interview workflow.
+                logger.warning(
+                    "面试 RAG 检索失败，继续使用无 RAG 证据出题: session_id=%s",
+                    session.session_id,
+                    exc_info=error,
+                )
+                results = []
         evidence = [{"content": item.chunk.content, "score": item.score,
                      "knowledgeBaseId": item.chunk.knowledge_base_id} for item in results]
         if self._evidence_is_insufficient(evidence) and self._web_evidence_tool is not None:
             await self._report_progress(session.session_id, "WEB_RETRIEVING")
-            documents = await self._web_evidence_tool.search_for_question_generation(topic)
+            try:
+                documents = await asyncio.wait_for(
+                    self._web_evidence_tool.search_for_question_generation(topic),
+                    timeout=INTERVIEW_WEB_TIMEOUT_SECONDS,
+                )
+            except Exception as error:
+                # Public web search is a best-effort third layer. Explicit URL
+                # imports keep their larger timeout, but an interview turn must
+                # proceed when the public network is slow or unavailable.
+                logger.warning(
+                    "面试网页证据检索失败，继续使用已有证据出题: session_id=%s",
+                    session.session_id,
+                    exc_info=error,
+                )
+                documents = []
             evidence.extend({
                 # Keep web evidence bounded for the question prompt. The full
                 # Markdown remains available through the explicit KB import.

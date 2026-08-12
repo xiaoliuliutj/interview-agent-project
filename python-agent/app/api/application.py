@@ -1,5 +1,6 @@
 """FastAPI entrypoint for the lower-layer Agent service."""
 
+import asyncio
 import json
 import logging
 import hashlib
@@ -16,7 +17,7 @@ from app.agent.memory.service import MemoryService
 from app.agent.rag.models import KnowledgeDocument
 from app.agent.rag.service import RagService
 from app.agent.skills.loader import SkillRegistry
-from app.agent.web_reader import fetch_public_article
+from app.agent.web_reader import crawl_public_site, fetch_public_article
 from app.bootstrap import build_interview_agent_service, build_resume_evaluation_agent
 from app.core.contracts import (
     AgentEvaluationRequest,
@@ -29,12 +30,21 @@ from app.core.contracts import (
     AgentSessionCompletionRequest,
     AgentSkillRequest,
     AgentWebFetchRequest,
+    AgentWebCrawlRequest,
     RunStatus,
     SessionStatus,
 )
-from app.core.exceptions import ApplicationException, ConsistencyError, ExceptionHandler, RequestError
+from app.core.exceptions import (
+    AgentDependencyError,
+    ApplicationException,
+    ConsistencyError,
+    ExceptionHandler,
+    RequestError,
+)
 
 logger = logging.getLogger(__name__)
+
+INTERVIEW_TURN_TIMEOUT_SECONDS = 150.0
 
 
 def create_app(
@@ -83,14 +93,32 @@ def create_app(
 
     @app.post("/v1/agent/respond", response_model=AgentResponse)
     async def respond(payload: AgentRespondRequest, request: Request) -> AgentResponse:
-        result = await _resolve_service(request).submit_answer_for_run(
-            user_id=payload.user_id,
-            session_id=payload.session_id,
-            candidate_answer=payload.answer,
-            run_id=payload.run_id,
-            expected_session_status=payload.session_status,
-            expected_state_version=payload.state_version,
-        )
+        service = _resolve_service(request)
+        try:
+            result = await asyncio.wait_for(
+                service.submit_answer_for_run(
+                    user_id=payload.user_id,
+                    session_id=payload.session_id,
+                    candidate_answer=payload.answer,
+                    run_id=payload.run_id,
+                    expected_session_status=payload.session_status,
+                    expected_state_version=payload.state_version,
+                ),
+                timeout=INTERVIEW_TURN_TIMEOUT_SECONDS,
+            )
+        except TimeoutError as error:
+            marker = getattr(service, "mark_progress_failed", None)
+            if callable(marker):
+                marker(payload.session_id)
+            raise AgentDependencyError(
+                "本轮面试处理超过 150 秒，请保留当前回答后重试",
+                retryable=False,
+            ) from error
+        except BaseException:
+            marker = getattr(service, "mark_progress_failed", None)
+            if callable(marker):
+                marker(payload.session_id)
+            raise
         return _success_response(
             api_version=payload.api_version, request_id=payload.request_id,
             run_id=payload.run_id, session=result.session,
@@ -248,6 +276,24 @@ def create_app(
             answer=document.title, output=document.as_dict(), error=None,
         )
 
+    @app.post("/v1/tools/web/crawl", response_model=AgentResponse)
+    async def crawl_web(payload: AgentWebCrawlRequest) -> AgentResponse:
+        from app.agent.llm.factory import LLMFactory
+        from app.agent.web_crawl_agent import WebCrawlPlanningAgent
+        from app.engineering.reliability.policy import RetryPolicy
+        from app.engineering.reliability.retry import AsyncRetryExecutor
+        assessor = WebCrawlPlanningAgent(
+            LLMFactory.create_chat_model(), PromptLoader(), AsyncRetryExecutor(RetryPolicy.load())
+        )
+        result = await crawl_public_site(payload.url, topic=payload.topic, assessor=assessor)
+        return AgentResponse(
+            api_version=payload.api_version, request_id=payload.request_id,
+            run_id=payload.run_id, code=100, status=RunStatus.COMPLETED,
+            user_id=payload.user_id, session_id=payload.session_id,
+            session_status=SessionStatus.ACTIVE, state_version=0,
+            answer=f"{len(result.pages)} valid pages", output=result.as_dict(), error=None,
+        )
+
     @app.exception_handler(RequestValidationError)
     async def request_validation_error(request: Request, error: RequestValidationError) -> JSONResponse:
         body = error.body
@@ -259,11 +305,13 @@ def create_app(
 
     @app.exception_handler(ApplicationException)
     async def application_error(request: Request, error: ApplicationException) -> JSONResponse:
+        await _mark_failed_interview_progress(request)
         return await _error_json_response(request, error, http_status=200)
 
     @app.exception_handler(Exception)
     async def unexpected_error(request: Request, error: Exception) -> JSONResponse:
         logger.exception("Unhandled lower-layer agent error")
+        await _mark_failed_interview_progress(request)
         return await _error_json_response(request, error, http_status=500)
 
     return app
@@ -275,6 +323,17 @@ def _resolve_service(request: Request) -> InterviewAgentService:
         service = build_interview_agent_service()
         request.app.state.interview_agent_service = service
     return service
+
+
+async def _mark_failed_interview_progress(request: Request) -> None:
+    if request.url.path != "/v1/agent/respond":
+        return
+    context = await _request_context(request)
+    session_id = _string_or_none(context.get("sessionId"))
+    service = request.app.state.interview_agent_service
+    marker = getattr(service, "mark_progress_failed", None)
+    if session_id and callable(marker):
+        marker(session_id)
 
 
 def _resolve_rag_service(request: Request) -> RagService:

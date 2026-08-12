@@ -1,3 +1,4 @@
+import asyncio
 from collections import deque
 
 import pytest
@@ -141,6 +142,16 @@ class RecordingWebEvidenceTool:
             markdown="# Redis\n\npublic technical evidence", url="https://redis.io/docs",
             title="Redis docs", fetched_at="2026-08-12T00:00:00Z", content_hash="hash",
         )]
+
+
+class HangingRagTool:
+    async def search_for_question_generation(self, query: str, *, knowledge_base_ids: tuple[str, ...]):
+        await asyncio.sleep(10)
+
+
+class HangingWebEvidenceTool:
+    async def search_for_question_generation(self, topic: str):
+        await asyncio.sleep(10)
 
 
 def build_plan() -> InterviewPlan:
@@ -477,6 +488,24 @@ async def test_insufficient_rag_falls_back_to_web_and_caches_result() -> None:
     assert first == second
     assert first[-1]["sourceType"] == "WEB"
     assert first[-1]["sourceUrl"] == "https://redis.io/docs"
+
+
+@pytest.mark.asyncio
+async def test_slow_optional_evidence_does_not_block_question_generation(monkeypatch) -> None:
+    repository, events = InMemorySessionRepository(), []
+    monkeypatch.setattr("app.agent.interview.service.INTERVIEW_RAG_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr("app.agent.interview.service.INTERVIEW_WEB_TIMEOUT_SECONDS", 0.01)
+    service, _, _, _ = build_service(
+        repository, [evaluation()], [], events, HangingRagTool(), HangingWebEvidenceTool()
+    )
+    profile = build_profile().model_copy(update={"system_knowledge_base_ids": ["system-kb"]})
+    session = await service.initialize_session(user_id="user-1", session_id="session-slow", profile=profile)
+    route = InterviewRoute(action=InterviewAction.NEXT_STAGE, next_topic="Redis caching")
+
+    evidence = await service._question_evidence(session, route)
+
+    assert evidence == []
+    assert service.progress_for("session-slow") == "WEB_RETRIEVING"
 
 
 @pytest.mark.asyncio
