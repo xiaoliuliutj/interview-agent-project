@@ -41,8 +41,15 @@ export function getUserId(): string {
 }
 
 instance.interceptors.request.use((config) => {
+  const userId = currentUserId();
   config.headers = config.headers ?? {};
-  config.headers['X-User-Id'] = currentUserId();
+  // Axios 1.x may provide an AxiosHeaders instance. Use its public setter
+  // when available so the identity header is not lost during normalization.
+  if (typeof config.headers.set === 'function') {
+    config.headers.set('X-User-Id', userId);
+  } else {
+    config.headers['X-User-Id'] = userId;
+  }
   return config;
 });
 
