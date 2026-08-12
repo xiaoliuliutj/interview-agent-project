@@ -63,7 +63,13 @@ public class KnowledgeBaseService {
         String id = idGenerator.next();
         String content;
         try {
-            content = tika.parseToString(file.getInputStream());
+            // Plain-text and Markdown are already knowledge documents. Parsing
+            // them through Tika adds an unnecessary failure point in container
+            // deployments, so read them directly as UTF-8. Binary office/PDF
+            // formats still use Tika's dedicated parsers.
+            content = isPlainTextDocument(originalFilename, file.getContentType())
+                    ? new String(file.getBytes(), StandardCharsets.UTF_8)
+                    : tika.parseToString(file.getInputStream());
         } catch (Exception error) {
             throw new BusinessException("KNOWLEDGE_BASE_PARSE_FAILED", "knowledge base document parsing failed");
         }
@@ -199,5 +205,13 @@ public class KnowledgeBaseService {
                 entity.getVectorStatus(), entity.getVectorError(),
                 entity.getChunkCount(), entity.getSourceUrl(), entity.getSourceTitle(),
                 entity.getSourceFetchedAt(), entity.getSourceHash());
+    }
+
+    private static boolean isPlainTextDocument(String filename, String contentType) {
+        String loweredName = filename.toLowerCase(java.util.Locale.ROOT);
+        if (loweredName.endsWith(".md") || loweredName.endsWith(".markdown") || loweredName.endsWith(".txt")) {
+            return true;
+        }
+        return contentType != null && contentType.toLowerCase(java.util.Locale.ROOT).startsWith("text/");
     }
 }
