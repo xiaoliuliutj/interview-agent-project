@@ -47,6 +47,9 @@ logger = logging.getLogger(__name__)
 
 INTERVIEW_RAG_TIMEOUT_SECONDS = 30.0
 INTERVIEW_WEB_TIMEOUT_SECONDS = 15.0
+# A turn contains several model nodes.  A single node must fail promptly so
+# the UI never remains on "evaluating" while the provider retries for minutes.
+INTERVIEW_MODEL_NODE_TIMEOUT_SECONDS = 45.0
 
 
 @dataclass(frozen=True)
@@ -105,6 +108,21 @@ class InterviewAgentService:
         self._progress[session_id] = stage
         if self._progress_reporter is not None:
             await self._progress_reporter(session_id, stage)
+
+    async def _run_interview_node(
+        self, session_id: str, stage: str, operation: Callable[[], Awaitable[object]]
+    ) -> object:
+        await self._report_progress(session_id, stage)
+        try:
+            return await asyncio.wait_for(
+                operation(), timeout=INTERVIEW_MODEL_NODE_TIMEOUT_SECONDS
+            )
+        except TimeoutError as error:
+            self.mark_progress_failed(session_id)
+            raise AgentDependencyError(
+                f"面试{stage}节点超过 {int(INTERVIEW_MODEL_NODE_TIMEOUT_SECONDS)} 秒未返回，请稍后重试",
+                retryable=True,
+            ) from error
 
     async def initialize_session(
         self,
@@ -284,23 +302,25 @@ class InterviewAgentService:
 
         expected_version = session.state_version
         memory_context = await self._memory_service.build_context(session)
-        await self._report_progress(session_id, "EVALUATING")
-        evaluation = await self._evaluation_agent.evaluate(
-            session,
-            candidate_answer,
-            memory_context,
+        evaluation = await self._run_interview_node(
+            session_id, "EVALUATING", lambda: self._evaluation_agent.evaluate(
+                session, candidate_answer, memory_context
+            )
         )
         if session.current_stage == InterviewStage.OPENING:
-            await self._replan_after_opening(session, candidate_answer)
+            await self._run_interview_node(
+                session_id, "PLANNING", lambda: self._replan_after_opening(session, candidate_answer)
+            )
         allowed_actions = self._allowed_actions(session, evaluation)
         next_stage = self._next_stage(session)
-        await self._report_progress(session_id, "ROUTING")
-        route = await self._routing_agent.route(
-            session,
-            evaluation,
-            {item.value for item in allowed_actions},
-            next_stage.value if next_stage else None,
-            memory_context,
+        route = await self._run_interview_node(
+            session_id, "ROUTING", lambda: self._routing_agent.route(
+                session,
+                evaluation,
+                {item.value for item in allowed_actions},
+                next_stage.value if next_stage else None,
+                memory_context,
+            )
         )
         route = self._enforce_route_limits(session, route, allowed_actions, next_stage, evaluation)
 
@@ -317,7 +337,9 @@ class InterviewAgentService:
             session.final_summary = self._fallback_summary(session, interrupted=False)
             if self._summary_agent is not None and session.turns:
                 try:
-                    session.final_evaluation = await self._summary_agent.summarize(session)
+                    session.final_evaluation = await self._run_interview_node(
+                        session_id, "SUMMARIZING", lambda: self._summary_agent.summarize(session)
+                    )
                     session.final_summary = session.final_evaluation.summary
                 except Exception as error:
                     logger.warning("面试会话总结生成失败: session_id=%s", session_id, exc_info=error)
@@ -330,9 +352,10 @@ class InterviewAgentService:
                     "模型在需要出题的路由中未返回 nextTopic", retryable=False
                 )
             evidence = await self._question_evidence(session, route)
-            await self._report_progress(session_id, "GENERATING_QUESTION")
-            session.current_question = await self._question_agent.generate(
-                session, route, evidence, next_question_memory_context
+            session.current_question = await self._run_interview_node(
+                session_id, "GENERATING_QUESTION", lambda: self._question_agent.generate(
+                    session, route, evidence, next_question_memory_context
+                )
             )
             session.current_topic = route.next_topic
             self._register_question(

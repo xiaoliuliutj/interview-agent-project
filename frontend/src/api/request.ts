@@ -18,20 +18,20 @@ const instance: AxiosInstance = axios.create({
 
 const USER_STORAGE_KEY = 'interview-agent-user-id';
 
-function createUserId(): string {
+export function createClientId(prefix = 'anonymous'): string {
   // crypto.randomUUID is only exposed in secure browser contexts on some
-  // browsers.  Public deployments may initially be reached through HTTP, so
-  // keep the temporary client identity usable until HTTPS is configured.
+  // browsers. Public HTTP deployments and older browsers need an equally
+  // non-empty, locally generated identifier for request idempotency.
   if (typeof globalThis.crypto?.randomUUID === 'function') {
     return globalThis.crypto.randomUUID();
   }
-  return `anonymous-${Date.now()}-${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}`;
 }
 
 function currentUserId(): string {
   const existing = localStorage.getItem(USER_STORAGE_KEY);
   if (existing && existing.trim()) return existing;
-  const generated = createUserId();
+  const generated = createClientId();
   localStorage.setItem(USER_STORAGE_KEY, generated);
   return generated;
 }

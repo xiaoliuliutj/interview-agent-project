@@ -26,6 +26,7 @@ interface InterviewChatPanelProps {
 
 const agentStatusLabel: Record<string, string> = {
   EVALUATING: '评估回答中',
+  PLANNING: '更新面试计划中',
   ROUTING: '规划下一步中',
   CACHE_LOOKUP: '查询会话缓存中',
   RAG_RETRIEVING: '检索知识库中',

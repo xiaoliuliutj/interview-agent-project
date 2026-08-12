@@ -9,6 +9,7 @@ import type {InterviewQuestion, InterviewSession} from '../types/interview';
 import type {Difficulty} from '../components/UnifiedInterviewModal';
 import type {CategoryDTO} from '../api/skill';
 import {historyApi} from '../api/history';
+import {createClientId} from '../api/request';
 
 interface Message {
   type: 'interviewer' | 'user';
@@ -225,37 +226,37 @@ export default function Interview({
   const handleSubmitAnswer = async () => {
     if (!answer.trim() || !session || !currentQuestion) return;
 
-    setIsSubmitting(true);
-    setAgentStatus('EVALUATING');
-    setError('');
-    const submittedAnswer = answer.trim();
-    const previous = pendingAnswerSubmissionRef.current;
-    const isRetry = previous !== null
-      && previous.sessionId === session.sessionId
-      && previous.question === currentQuestion.question
-      && previous.answer === submittedAnswer;
-    const submission: PendingAnswerSubmission = isRetry && previous
-      ? previous
-      : {
-          sessionId: session.sessionId,
-          question: currentQuestion.question,
-          answer: submittedAnswer,
-          runId: crypto.randomUUID(),
-        };
-    pendingAnswerSubmissionRef.current = submission;
-    sessionStorage.setItem(pendingAnswerStorageKey(session.sessionId), JSON.stringify(submission));
-
-    if (!isRetry) {
-      const userMessage: Message = {
-        type: 'user', content: submittedAnswer, submissionRunId: submission.runId,
-      };
-      setMessages(prev => [
-        ...prev.filter(message => message.submissionRunId !== previous?.runId),
-        userMessage,
-      ]);
-    }
-
     try {
+      setIsSubmitting(true);
+      setAgentStatus('EVALUATING');
+      setError('');
+      const submittedAnswer = answer.trim();
+      const previous = pendingAnswerSubmissionRef.current;
+      const isRetry = previous !== null
+        && previous.sessionId === session.sessionId
+        && previous.question === currentQuestion.question
+        && previous.answer === submittedAnswer;
+      const submission: PendingAnswerSubmission = isRetry && previous
+        ? previous
+        : {
+            sessionId: session.sessionId,
+            question: currentQuestion.question,
+            answer: submittedAnswer,
+            runId: createClientId('answer-run'),
+          };
+      pendingAnswerSubmissionRef.current = submission;
+      sessionStorage.setItem(pendingAnswerStorageKey(session.sessionId), JSON.stringify(submission));
+
+      if (!isRetry) {
+        const userMessage: Message = {
+          type: 'user', content: submittedAnswer, submissionRunId: submission.runId,
+        };
+        setMessages(prev => [
+          ...prev.filter(message => message.submissionRunId !== previous?.runId),
+          userMessage,
+        ]);
+      }
+
       const response = await interviewApi.submitAnswer({
         sessionId: session.sessionId,
         answer: submittedAnswer,

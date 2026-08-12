@@ -22,7 +22,7 @@ from app.agent.memory.policy import MemoryPolicy
 from app.agent.memory.service import MemoryService
 from app.agent.rag.models import KnowledgeChunk, RagSearchResult
 from app.core.contracts import SessionStatus
-from app.core.exceptions import ConsistencyError
+from app.core.exceptions import AgentDependencyError, ConsistencyError
 from app.core.prompt_loader import PromptLoader
 
 
@@ -151,6 +151,11 @@ class HangingRagTool:
 
 class HangingWebEvidenceTool:
     async def search_for_question_generation(self, topic: str):
+        await asyncio.sleep(10)
+
+
+class HangingEvaluationAgent:
+    async def evaluate(self, session, candidate_answer, memory_context):
         await asyncio.sleep(10)
 
 
@@ -506,6 +511,26 @@ async def test_slow_optional_evidence_does_not_block_question_generation(monkeyp
 
     assert evidence == []
     assert service.progress_for("session-slow") == "WEB_RETRIEVING"
+
+
+@pytest.mark.asyncio
+async def test_slow_evaluation_fails_promptly_and_keeps_failed_progress(monkeypatch) -> None:
+    repository, events = InMemorySessionRepository(), []
+    monkeypatch.setattr(
+        "app.agent.interview.service.INTERVIEW_MODEL_NODE_TIMEOUT_SECONDS", 0.01
+    )
+    service, _, _, _ = build_service(repository, [], [], events)
+    service._evaluation_agent = HangingEvaluationAgent()
+    await service.initialize_session(user_id="user-1", session_id="session-timeout", profile=build_profile())
+
+    with pytest.raises(AgentDependencyError):
+        await service.submit_answer_for_run(
+            user_id="user-1", session_id="session-timeout", candidate_answer="answer",
+            run_id="run-timeout", expected_session_status=SessionStatus.ACTIVE,
+            expected_state_version=0,
+        )
+
+    assert service.progress_for("session-timeout") == "FAILED"
 
 
 @pytest.mark.asyncio
