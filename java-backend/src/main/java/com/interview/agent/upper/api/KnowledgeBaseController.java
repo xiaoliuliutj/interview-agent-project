@@ -45,7 +45,7 @@ public class KnowledgeBaseController {
         java.time.Instant fetchedAt = null;
         if (sourceFetchedAt != null && !sourceFetchedAt.isBlank()) {
             try { fetchedAt = java.time.Instant.parse(sourceFetchedAt); }
-            catch (java.time.DateTimeParseException ignored) { /* provenance is optional */ }
+            catch (java.time.format.DateTimeParseException ignored) { /* provenance is optional */ }
         }
         KnowledgeBaseView view = service.upload(file, name, category, userId,
                 sourceUrl, sourceTitle, fetchedAt, sourceHash);
