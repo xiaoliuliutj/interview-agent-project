@@ -26,6 +26,11 @@ class OpenAIEmbeddingProvider:
             "api_key": settings.embedding_api_key or settings.model_api_key,
             "timeout": min(settings.request_timeout_seconds, 120),
             "max_retries": 0,
+            # Some OpenAI-compatible embedding providers accept only
+            # ``input: string[]`` and reject OpenAI's token-array form.
+            # RAG chunks are already bounded by TokenChunker, so bypass the
+            # SDK's context-length tokenization and send original strings.
+            "check_embedding_ctx_length": False,
         }
         base_url = settings.embedding_base_url or settings.model_base_url
         if base_url:
