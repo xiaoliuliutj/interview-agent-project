@@ -64,7 +64,7 @@
 ## 5. 异步与失败处理
 
 - Rabbit 队列的消息只携带任务类型、资源 ID 和用户 ID；消费时重新读取数据库，避免传递实体或大文本。
-- `AgentCallExecutor` 对网络异常和下层可重试错误做有限同步重试；Rabbit 为简历分析与知识库索引提供异步重试。
+- `AgentCallExecutor` 只对尚未收到标准响应的网络异常做有限同步重试；下层一旦返回结构化成功或失败结果，Java 不重放整次调用。Rabbit 为简历分析与知识库索引提供异步重试，面试失败则由用户使用原 `runId` 明确重试。
 - 任务投递失败会同步写入失败状态；取消任务、无效消息、权限错误和结构化输出错误不会被无意义重试。
 - 队列消费者会记录并确认格式不完整、资源 ID 非法或任务类型不支持的消息；知识库索引只将可重试的下层网络/模型故障重新抛给 Rabbit，参数和契约错误已标记失败后直接确认。
 
@@ -97,3 +97,11 @@
 
 - 容器联调中，Java 默认 HTTP 客户端会尝试 `h2c`（HTTP/2 明文升级），而 Uvicorn 下层服务只按 HTTP/1.1 接收请求。日志中出现 `Unsupported upgrade request` 或 `Invalid HTTP request received` 时，FastAPI 会拿不到可校验的 JSON 请求体，并以 HTTP 400 返回空的请求标识字段。
 - `AgentHttpConfiguration` 显式使用 JDK `HttpClient.Version.HTTP_1_1`。这是上下层服务之间的协议适配，不改变业务 JSON 契约；之后排查下层 400 时，应先检查 Python 日志是否仍出现上述协议告警。
+## Unified API error contract
+
+All controller failures now use the same response envelope. Success responses remain
+`{code: 200, message: "success", data: ...}` for compatibility. Error responses contain
+an HTTP status in `code`, a safe user-facing `message`, `data: null`, and an `error`
+object with `type`, `retryable`, `httpStatus`, `requestId`, and optional Agent
+`runId`, `sessionId`, and `stage`. The server logs the original exception under the
+same request ID, but never returns stack traces or internal secrets to the browser.

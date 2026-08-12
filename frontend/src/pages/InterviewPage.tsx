@@ -9,7 +9,7 @@ import type {InterviewQuestion, InterviewSession} from '../types/interview';
 import type {Difficulty} from '../components/UnifiedInterviewModal';
 import type {CategoryDTO} from '../api/skill';
 import {historyApi} from '../api/history';
-import {createClientId} from '../api/request';
+import {createClientId, getErrorDisplayMessage} from '../api/request';
 
 interface Message {
   type: 'interviewer' | 'user';
@@ -138,7 +138,7 @@ export default function Interview({
 
       initSession(newSession);
     } catch (err) {
-      setError('创建面试失败，请重试');
+      setError(getErrorDisplayMessage(err, '创建面试失败'));
       console.error(err);
     } finally {
       setIsCreating(false);
@@ -159,7 +159,7 @@ export default function Interview({
         setAnswer(currentQ.userAnswer);
       }
     } catch (err) {
-      setError('恢复面试失败，请重试');
+      setError(getErrorDisplayMessage(err, '恢复面试失败'));
       console.error(err);
     } finally {
       setIsCreating(false);
@@ -271,7 +271,7 @@ export default function Interview({
       // 网络重试还是幂等重放，旧问题、用户回答、逐轮评估和下一题都不会丢失。
       initSession(response.session);
     } catch (err) {
-      setError(err instanceof Error ? `提交答案失败：${err.message}` : '提交答案失败，请重试');
+      setError(getErrorDisplayMessage(err, '提交答案失败'));
       console.error(err);
     } finally {
       setIsSubmitting(false);
@@ -290,7 +290,7 @@ export default function Interview({
       const completed = await interviewApi.getSession(session.sessionId);
       initSession(completed);
     } catch (err) {
-      setError('提前交卷失败，请重试');
+      setError(getErrorDisplayMessage(err, '提前交卷失败'));
       console.error(err);
     } finally {
       setIsSubmitting(false);
@@ -347,7 +347,7 @@ export default function Interview({
       link.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      setError('评估报告下载失败，请稍后重试');
+      setError(getErrorDisplayMessage(err, '评估报告下载失败'));
       console.error(err);
     }
   };

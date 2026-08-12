@@ -1,36 +1,57 @@
-import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
+import axios, {AxiosError, AxiosInstance, AxiosRequestConfig} from 'axios';
 
-/**
- * 后端统一响应结构
- */
 interface Result<T = unknown> {
-  code: number;
+  code: number | string;
   message: string;
   data: T;
+  error?: ApiErrorDetail | null;
+}
+
+export interface ApiErrorDetail {
+  type: string;
+  message?: string;
+  retryable: boolean;
+  httpStatus?: number;
+  requestId?: string | null;
+  runId?: string | null;
+  sessionId?: string | null;
+  stage?: string | null;
+}
+
+export class ApiRequestError extends Error {
+  readonly code: string;
+  readonly retryable: boolean;
+  readonly httpStatus?: number;
+  readonly requestId?: string;
+  readonly runId?: string;
+  readonly sessionId?: string;
+  readonly stage?: string;
+
+  constructor(message: string, detail: Partial<ApiErrorDetail> & {type: string}) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.code = detail.type;
+    this.retryable = detail.retryable ?? false;
+    this.httpStatus = detail.httpStatus;
+    this.requestId = detail.requestId ?? undefined;
+    this.runId = detail.runId ?? undefined;
+    this.sessionId = detail.sessionId ?? undefined;
+    this.stage = detail.stage ?? undefined;
+  }
 }
 
 const baseURL = import.meta.env.PROD ? '' : 'http://localhost:8080';
-
-const instance: AxiosInstance = axios.create({
-  baseURL,
-  timeout: 60000,
-});
-
+const instance: AxiosInstance = axios.create({baseURL, timeout: 60000});
 const USER_STORAGE_KEY = 'interview-agent-user-id';
 
 export function createClientId(prefix = 'anonymous'): string {
-  // crypto.randomUUID is only exposed in secure browser contexts on some
-  // browsers. Public HTTP deployments and older browsers need an equally
-  // non-empty, locally generated identifier for request idempotency.
-  if (typeof globalThis.crypto?.randomUUID === 'function') {
-    return globalThis.crypto.randomUUID();
-  }
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}`;
 }
 
 function currentUserId(): string {
   const existing = localStorage.getItem(USER_STORAGE_KEY);
-  if (existing && existing.trim()) return existing;
+  if (existing?.trim()) return existing;
   const generated = createClientId();
   localStorage.setItem(USER_STORAGE_KEY, generated);
   return generated;
@@ -41,124 +62,141 @@ export function getUserId(): string {
 }
 
 instance.interceptors.request.use((config) => {
-  const userId = currentUserId();
   config.headers = config.headers ?? {};
-  // Axios 1.x may provide an AxiosHeaders instance. Use its public setter
-  // when available so the identity header is not lost during normalization.
-  if (typeof config.headers.set === 'function') {
-    config.headers.set('X-User-Id', userId);
-  } else {
-    config.headers['X-User-Id'] = userId;
-  }
+  const setHeader = (name: string, value: string) => {
+    if (typeof config.headers.set === 'function') config.headers.set(name, value);
+    else config.headers[name] = value;
+  };
+  setHeader('X-User-Id', currentUserId());
+  setHeader('X-Request-Id', createClientId('web'));
   return config;
 });
 
-/**
- * 响应拦截器
- * 
- * 后端约定：所有响应都是 HTTP 200 + Result
- * - code === 200 → 成功，返回 data
- * - code !== 200 → 失败，直接显示 message
- */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function parseApiError(data: unknown, fallbackStatus?: number, responseRequestId?: string): ApiRequestError | null {
+  if (!isRecord(data)) return null;
+  const nested = isRecord(data.error) ? data.error : undefined;
+  const rawCode = nested?.type ?? data.code;
+  if (rawCode === undefined) return null;
+  const message = stringValue(nested?.message) ?? stringValue(data.message) ?? '请求处理失败';
+  const type = stringValue(rawCode) ?? String(rawCode);
+  return new ApiRequestError(message, {
+    type,
+    retryable: typeof nested?.retryable === 'boolean' ? nested.retryable : (fallbackStatus ?? 0) >= 500,
+    httpStatus: typeof nested?.httpStatus === 'number' ? nested.httpStatus : fallbackStatus,
+    requestId: stringValue(nested?.requestId) ?? responseRequestId,
+    runId: stringValue(nested?.runId),
+    sessionId: stringValue(nested?.sessionId),
+    stage: stringValue(nested?.stage),
+  });
+}
+
+async function decodeErrorData(data: unknown): Promise<unknown> {
+  if (!(data instanceof Blob) || !data.type.includes('json')) return data;
+  try {
+    return JSON.parse(await data.text()) as unknown;
+  } catch {
+    return data;
+  }
+}
+
+function transportError(error: AxiosError): ApiRequestError {
+  const isUpload = error.config?.url?.includes('/upload')
+    || String(error.config?.headers?.['Content-Type'] ?? '').includes('multipart');
+  if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+    return new ApiRequestError(isUpload ? '上传超时，请检查网络后重试' : '请求超时，服务可能仍在处理中', {
+      type: 'NETWORK_TIMEOUT', retryable: true, stage: 'NETWORK',
+    });
+  }
+  return new ApiRequestError(isUpload ? '上传连接中断，请检查网络后重试' : '无法连接服务器，请检查网络或服务状态', {
+    type: 'NETWORK_UNAVAILABLE', retryable: true, stage: 'NETWORK',
+  });
+}
+
 instance.interceptors.response.use(
   (response) => {
     const result = response.data as Result;
-    
-    // 检查是否是 Result 格式
-    if (result && typeof result === 'object' && 'code' in result) {
-      if (result.code === 200) {
-        // 成功：返回 data
+    if (isRecord(result) && 'code' in result) {
+      if (result.code === 200 || result.code === '200') {
         response.data = result.data;
         return response;
       }
-      // 失败：直接抛出 message
-      return Promise.reject(new Error(result.message || '请求失败'));
+      return Promise.reject(parseApiError(result, response.status, response.headers['x-request-id'])
+        ?? new ApiRequestError('请求处理失败', {type: String(result.code), retryable: false}));
     }
-    
-    // 非 Result 格式，直接返回
     return response;
   },
-  (error) => {
-    // 有响应的情况：后端返回了结果（即使是错误）
-    if (error.response) {
-      const { data } = error.response;
-      // 尝试解析 Result 格式
-      if (data && typeof data === 'object' && 'code' in data && 'message' in data) {
-        const result = data as Result;
-        return Promise.reject(new Error(result.message || '请求失败'));
-      }
-      // 响应格式不对
-      return Promise.reject(new Error('请求失败，请重试'));
-    }
+  async (unknownError: unknown) => {
+    if (!axios.isAxiosError(unknownError)) return Promise.reject(unknownError);
+    if (!unknownError.response) return Promise.reject(transportError(unknownError));
+    const response = unknownError.response;
+    const responseData = await decodeErrorData(response.data);
+    const parsed = parseApiError(responseData, response.status, response.headers['x-request-id']);
+    if (parsed) return Promise.reject(parsed);
 
-    // 没有响应的情况：真正的网络错误或连接被重置
-    // 对于文件上传，可能是网络超时或连接中断，但不一定是文件大小问题
-    // 让后端返回真实的错误信息，而不是在这里假设
-    const config = error.config;
-    const isUpload = config && (
-      config.url?.includes('/upload') ||
-      config.headers?.['Content-Type']?.toString().includes('multipart')
-    );
-
-    if (isUpload) {
-      // 文件上传失败且没有响应，可能是网络超时或连接中断
-      // 不直接假设是文件大小问题，返回更通用的错误信息
-      return Promise.reject(new Error('上传失败，可能是网络超时或连接中断，请重试'));
-    }
-
-    // 其他网络错误
-    return Promise.reject(new Error('网络连接失败，请检查网络'));
-  }
+    const message = response.status >= 500
+      ? '服务器暂时无法处理请求，请稍后重试'
+      : `请求被服务器拒绝（HTTP ${response.status}）`;
+    return Promise.reject(new ApiRequestError(message, {
+      type: response.status >= 500 ? 'SERVER_RESPONSE_INVALID' : 'HTTP_REQUEST_FAILED',
+      retryable: response.status >= 500,
+      httpStatus: response.status,
+      requestId: response.headers['x-request-id'],
+      stage: 'HTTP',
+    }));
+  },
 );
 
 export const request = {
   get<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
-    return instance.get(url, config).then(res => res.data);
+    return instance.get(url, config).then(response => response.data);
   },
-
   post<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
-    return instance.post(url, data, config).then(res => res.data);
+    return instance.post(url, data, config).then(response => response.data);
   },
-
   put<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
-    return instance.put(url, data, config).then(res => res.data);
+    return instance.put(url, data, config).then(response => response.data);
   },
-
   patch<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
-    return instance.patch(url, data, config).then(res => res.data);
+    return instance.patch(url, data, config).then(response => response.data);
   },
-
   delete<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
-    return instance.delete(url, config).then(res => res.data);
+    return instance.delete(url, config).then(response => response.data);
   },
-
-  /**
-   * 文件上传
-   */
   upload<T>(url: string, formData: FormData, config?: AxiosRequestConfig): Promise<T> {
     return instance.post(url, formData, {
-      timeout: 300000, // 5分钟，与Nginx proxy_read_timeout对齐
-      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000,
+      headers: {'Content-Type': 'multipart/form-data'},
       ...config,
-    }).then(res => res.data);
+    }).then(response => response.data);
   },
-
-  /**
-   * 获取原始实例（用于特殊场景如下载 Blob）
-   */
   getInstance(): AxiosInstance {
     return instance;
   },
 };
 
-/**
- * 获取错误信息
- */
 export function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return '未知错误';
+  return error instanceof Error ? error.message : '发生未知错误';
+}
+
+/** Human-readable text which keeps diagnostics safe to show in the UI. */
+export function getErrorDisplayMessage(error: unknown, prefix?: string): string {
+  const message = getErrorMessage(error);
+  if (!(error instanceof ApiRequestError)) return prefix ? `${prefix}：${message}` : message;
+  const details = [
+    `错误码：${error.code}`,
+    error.stage ? `阶段：${error.stage}` : null,
+    error.retryable ? '可以重试' : '请检查输入或配置后再试',
+    error.requestId ? `请求编号：${error.requestId}` : null,
+  ].filter(Boolean).join('；');
+  return `${prefix ? `${prefix}：` : ''}${message}（${details}）`;
 }
 
 export default request;

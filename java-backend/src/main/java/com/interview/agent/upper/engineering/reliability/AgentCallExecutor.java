@@ -23,10 +23,14 @@ public class AgentCallExecutor {
         AgentGatewayException lastException = null;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                AgentResponse response = call.get();
-                if (!response.retryable() || attempt == maxAttempts) {
-                    return response;
-                }
+                // A structured response means the lower service completed this
+                // request, even when its result is FAILED/retryable. Replaying an
+                // entire interview turn here duplicates the lower layer's own
+                // bounded model retries and makes progress report FAILED while a
+                // second physical request is already running. The caller receives
+                // the response and decides whether the user or an async worker may
+                // retry the logical operation with the same run ID.
+                return call.get();
             } catch (AgentGatewayException error) {
                 lastException = error;
                 if (!error.retryable() || attempt == maxAttempts) {

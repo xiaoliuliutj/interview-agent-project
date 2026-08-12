@@ -14,6 +14,7 @@ import com.interview.agent.upper.domain.ResumeEntity;
 import com.interview.agent.upper.repository.CandidateRepository;
 import com.interview.agent.upper.repository.ResumeRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpStatus;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -179,8 +180,24 @@ public class InterviewService {
         if (response == null || response.code() < 100 || response.code() >= 200) {
             String message = response != null && response.error() != null
                     ? response.error().message() : "lower agent processing failed";
-            throw new BusinessException(errorCode, message);
+            String type = response != null && response.error() != null && response.error().type() != null
+                    ? response.error().type() : errorCode;
+            boolean retryable = response != null && response.error() != null && response.error().retryable();
+            String stage = response == null ? "AGENT_CALL"
+                    : firstNonBlank(response.turnStage(), response.currentStage(), response.status());
+            throw new BusinessException(type, message, retryable,
+                    retryable ? HttpStatus.SERVICE_UNAVAILABLE : HttpStatus.BAD_GATEWAY,
+                    response == null ? null : response.requestId(),
+                    response == null ? null : response.runId(),
+                    response == null ? null : response.sessionId(), stage);
         }
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) return value;
+        }
+        return null;
     }
 
     private static void requireMatchingResponse(

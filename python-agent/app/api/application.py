@@ -71,6 +71,7 @@ def create_app(
 
     @app.post("/v1/agent/sessions/initialize", response_model=AgentResponse)
     async def initialize_session(payload: AgentInitializationRequest, request: Request) -> AgentResponse:
+        _remember_request_context(request, payload)
         session = await _resolve_service(request).initialize_session(
             user_id=payload.user_id,
             session_id=payload.session_id,
@@ -93,6 +94,7 @@ def create_app(
 
     @app.post("/v1/agent/respond", response_model=AgentResponse)
     async def respond(payload: AgentRespondRequest, request: Request) -> AgentResponse:
+        _remember_request_context(request, payload)
         service = _resolve_service(request)
         try:
             result = await asyncio.wait_for(
@@ -131,6 +133,7 @@ def create_app(
 
     @app.post("/v1/agent/sessions/complete", response_model=AgentResponse)
     async def complete_session(payload: AgentSessionCompletionRequest, request: Request) -> AgentResponse:
+        _remember_request_context(request, payload)
         service = _resolve_service(request)
         session = (await service.pause_session(
                        user_id=payload.user_id, session_id=payload.session_id,
@@ -154,6 +157,7 @@ def create_app(
 
     @app.post("/v1/agent/evaluate/resume", response_model=AgentResponse)
     async def evaluate_resume(payload: AgentEvaluationRequest, request: Request) -> AgentResponse:
+        _remember_request_context(request, payload)
         fingerprint = _resume_evaluation_fingerprint(payload)
         memory_service = _resolve_memory_service(request)
         result = await memory_service.get_resume_evaluation_run(
@@ -204,6 +208,7 @@ def create_app(
     async def activate_resume_memory(
         payload: AgentResumeMemoryActivationRequest, request: Request
     ) -> AgentResponse:
+        _remember_request_context(request, payload)
         await _resolve_memory_service(request).activate_resume(
             user_id=payload.user_id, resume_id=payload.subject_id,
             candidate_id=payload.candidate_id, resume_text=payload.input_text,
@@ -219,6 +224,7 @@ def create_app(
 
     @app.post("/v1/agent/rag/index", response_model=AgentResponse)
     async def index_rag(payload: AgentRagIndexRequest, request: Request) -> AgentResponse:
+        _remember_request_context(request, payload)
         count = await _resolve_rag_service(request).index_document(KnowledgeDocument(
             knowledge_base_id=payload.knowledge_base_ids[0],
             document_id=payload.document_id,
@@ -235,6 +241,7 @@ def create_app(
 
     @app.post("/v1/agent/rag/delete", response_model=AgentResponse)
     async def delete_rag(payload: AgentRagDeleteRequest, request: Request) -> AgentResponse:
+        _remember_request_context(request, payload)
         await _resolve_rag_service(request).delete_knowledge_base(payload.knowledge_base_id)
         return AgentResponse(
             api_version=payload.api_version, request_id=payload.request_id,
@@ -245,7 +252,8 @@ def create_app(
         )
 
     @app.post("/v1/agent/skills", response_model=AgentResponse)
-    async def skills_catalog(payload: AgentSkillRequest) -> AgentResponse:
+    async def skills_catalog(payload: AgentSkillRequest, request: Request) -> AgentResponse:
+        _remember_request_context(request, payload)
         if payload.operation == "agent.skills.parse-jd" and payload.input_text is None:
             raise RequestError("agent.skills.parse-jd requires inputText")
         registry = SkillRegistry()
@@ -260,13 +268,14 @@ def create_app(
         )
 
     @app.post("/v1/tools/web/fetch", response_model=AgentResponse)
-    async def fetch_web(payload: AgentWebFetchRequest) -> AgentResponse:
+    async def fetch_web(payload: AgentWebFetchRequest, request: Request) -> AgentResponse:
         """Fetch and extract a single public HTML page for preview/import.
 
         No page content is executed or fed into system instructions.  The
         caller receives Markdown plus provenance so the upper layer can ask
         for an explicit confirmation before indexing it.
         """
+        _remember_request_context(request, payload)
         document = await fetch_public_article(payload.url)
         return AgentResponse(
             api_version=payload.api_version, request_id=payload.request_id,
@@ -277,7 +286,8 @@ def create_app(
         )
 
     @app.post("/v1/tools/web/crawl", response_model=AgentResponse)
-    async def crawl_web(payload: AgentWebCrawlRequest) -> AgentResponse:
+    async def crawl_web(payload: AgentWebCrawlRequest, request: Request) -> AgentResponse:
+        _remember_request_context(request, payload)
         from app.agent.llm.factory import LLMFactory
         from app.agent.web_crawl_agent import WebCrawlPlanningAgent
         from app.engineering.reliability.policy import RetryPolicy
@@ -382,6 +392,9 @@ def _success_response(*, api_version: str, request_id: str, run_id: str,
 
 
 async def _request_context(request: Request) -> Mapping[str, object]:
+    remembered = getattr(request.state, "agent_context", None)
+    if isinstance(remembered, Mapping):
+        return remembered
     try:
         body = await request.body()
         parsed = json.loads(body) if body else {}
@@ -390,22 +403,39 @@ async def _request_context(request: Request) -> Mapping[str, object]:
         return {}
 
 
+def _remember_request_context(request: Request, payload: object) -> None:
+    dumper = getattr(payload, "model_dump", None)
+    if callable(dumper):
+        request.state.agent_context = dumper(by_alias=True, mode="json")
+
+
 async def _error_response(
     request: Request, error: BaseException, context: Mapping[str, object] | None = None
 ) -> AgentResponse:
     resolved_context = context if context is not None else await _request_context(request)
+    session_status = _session_status_or_failed(resolved_context.get("sessionStatus"))
+    state_version = resolved_context.get("stateVersion")
     return AgentResponse(
         api_version=_string_or_none(resolved_context.get("apiVersion")),
         request_id=_string_or_none(resolved_context.get("requestId")),
         run_id=_string_or_none(resolved_context.get("runId")), code=ExceptionHandler.to_code(error),
         status=RunStatus.FAILED, user_id=_string_or_none(resolved_context.get("userId")),
-        session_id=_string_or_none(resolved_context.get("sessionId")), session_status=SessionStatus.FAILED,
-        state_version=0, answer=None, error=ExceptionHandler.to_error_info(error),
+        session_id=_string_or_none(resolved_context.get("sessionId")), session_status=session_status,
+        state_version=state_version if isinstance(state_version, int) and state_version >= 0 else 0,
+        answer=None, current_stage="FAILED", error=ExceptionHandler.to_error_info(error),
     )
 
 
 def _string_or_none(value: object) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
+
+
+def _session_status_or_failed(value: object) -> SessionStatus:
+    """A failed run must not falsely mark an existing interview session as failed."""
+    try:
+        return SessionStatus(value)
+    except (TypeError, ValueError):
+        return SessionStatus.FAILED
 
 
 def _candidate_response_output(output: dict[str, object] | None) -> dict[str, object] | None:

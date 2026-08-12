@@ -10,6 +10,7 @@
     "ConnectionError",
     "APIConnectionError",
     "APITimeoutError",
+    "InternalServerError",
     "RateLimitError",
     "ServiceUnavailableError"
   ]

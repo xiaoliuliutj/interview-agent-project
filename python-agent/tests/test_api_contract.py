@@ -267,6 +267,9 @@ async def test_failed_respond_remains_visible_in_progress_endpoint() -> None:
         progress = await client.get("/v1/agent/sessions/session-fail/progress")
 
     assert response.status_code == 500
+    assert response.json()["sessionStatus"] == "ACTIVE"
+    assert response.json()["stateVersion"] == 0
+    assert response.json()["currentStage"] == "FAILED"
     assert progress.json() == {"stage": "FAILED"}
 
 
