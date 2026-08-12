@@ -141,6 +141,7 @@ def _few_shot_output(schema: type[BaseModel]) -> dict[str, Any]:
                 {"stage": "SUMMARY", "max_primary_questions": 1, "max_followups_per_question": 0, "difficulty": "MEDIUM", "topics": ["总结"], "time_budget_minutes": 3},
             ],
         },
+        "InterviewSkillSelection": {"selectedSkills": ["interview-coach"]},
         "InterviewEvaluation": {"evaluation_summary": "回答覆盖了核心概念。", "score": 75, "answer_summary": "说明了基本原理。", "strengths": ["概念正确"], "weaknesses": ["缺少细节"], "preferences": []},
         "InterviewRoute": {"action": "NEXT_QUESTION", "next_topic": "线程池参数设计"},
         "GeneratedQuestion": {"question": "请说明线程池核心参数及其作用。"},

@@ -15,7 +15,7 @@
 
 一次会话包含 OPENING、PROJECT、FUNDAMENTAL、SCENARIO、CODING、SUMMARY 六个阶段。创建会话时上层传递 `difficulty`（EASY/MEDIUM/HARD），下层在第一轮生成计划并固化到会话，后续轮次不得改变难度。
 
-下层在每次规划和决策时从配置目录加载 Skill。Skill 由 Agent 根据目标职位、JD 和历史薄弱点选择；当前文本面试只通过受控的内部 `RagSearchTool` 读取 RAG，评分节点不具备该工具。`allowedTools` 作为 Skill 能力声明保留，用于后续 MCP/工具编排扩展；Java 只读取公开目录，不保存 Skill 正文。
+下层规划时先读取配置目录中实际安装并启用的 Skill 清单，再由独立选择节点从该白名单中选择，随后加载对应 `SKILL.md` 进入规划。当前文本面试只通过受控的内部 `RagSearchTool` 读取 RAG，评分节点不具备该工具。`allowedTools` 只能声明运行时已经实现的工具，未知工具会在 Skill 加载时被拒绝；Java 只读取公开目录，不保存 Skill 正文。
 
 候选人提交回答后，下层先完成本轮评估，再决定追问、换题或换阶段；只有方向确定后才读取 RAG 缓存或检索并生成具体题目。每轮内部记录包含分数、回答摘要、优势和薄弱点，但 Java 只持久化问题、回答和会话状态。SUMMARY 阶段先对所有轮次综合评分，再反馈总分、表现总结、优势、弱势和后续建议。
 

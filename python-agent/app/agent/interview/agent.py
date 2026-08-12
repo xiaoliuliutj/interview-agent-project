@@ -13,6 +13,7 @@ from .models import (
     InterviewPlan,
     InterviewRoute,
     InterviewSession,
+    InterviewSkillSelection,
     InterviewSummary,
     InterviewStage,
 )
@@ -33,16 +34,46 @@ class InterviewPlanner:
         self._structured_output = StructuredOutputInvoker(prompt_loader, retry_executor)
 
     async def create_plan(self, profile: CandidateProfile) -> InterviewPlan:
-        skills = self._skill_registry.select_for_interview(
+        available = self._skill_registry.available_for_interview()
+        available_by_id = {item.skill_id: item for item in available}
+        suggested = self._skill_registry.select_for_interview(
             target_role=profile.target_role,
             jd_text=profile.jd_text,
             requested_skill_id=profile.requested_skill_id,
         )
+        selection = await self._structured_output.invoke(
+            model=self._model,
+            schema=InterviewSkillSelection,
+            business_prompt=self._prompt_loader.render("interview/skill-selection.md", {}),
+            input_payload={
+                "candidate": profile.model_dump(mode="json"),
+                "availableSkills": self._skill_registry.selection_catalog(),
+                "suggestedSkills": [item.skill_id for item in suggested],
+                "requiredSkills": [
+                    skill_id for skill_id in ("interview-coach", profile.requested_skill_id)
+                    if skill_id and skill_id in available_by_id
+                ],
+            },
+        )
+        selected_ids = [
+            skill_id for skill_id in selection.selected_skills
+            if skill_id in available_by_id
+        ]
+        if not selected_ids:
+            selected_ids = [item.skill_id for item in suggested]
+        required_ids = ["interview-coach"]
+        if profile.requested_skill_id in available_by_id:
+            required_ids.append(profile.requested_skill_id)
+        selected_ids = list(dict.fromkeys([*required_ids, *selected_ids]))[:4]
+        skills = self._skill_registry.resolve_for_interview(selected_ids)
         system_prompt = self._prompt_loader.render(
             "interview/planner.md",
             {"skill_instructions": "\n\n".join(item.instructions for item in skills)},
         )
-        input_payload = profile.model_dump(mode="json")
+        input_payload = {
+            **profile.model_dump(mode="json"),
+            "selectedSkills": selected_ids,
+        }
         result = await self._structured_output.invoke(
             model=self._model, schema=InterviewPlan, business_prompt=system_prompt,
             input_payload=input_payload,
@@ -65,9 +96,9 @@ class InterviewPlanner:
                 limits = {"max_primary_questions": 4, "max_followups_per_question": 2}
             normalized_stages.append(item.model_copy(update=limits))
         result = result.model_copy(update={"stages": normalized_stages})
-        # Skill 选择属于下层 Agent 决策，写入计划快照，后续恢复会话不重新漂移。
-        if not result.selected_skills:
-            result = result.model_copy(update={"selected_skills": [item.skill_id for item in skills]})
+        # Skill selection is a separate Agent decision based on the runtime
+        # registry. The planning response cannot replace it with a new ID.
+        result = result.model_copy(update={"selected_skills": list(dict.fromkeys(selected_ids))})
         return result
 
 class InterviewEvaluationAgent:
@@ -178,7 +209,7 @@ class InterviewRoutingAgent:
             "weak_topics": memory_context.weak_topics,
         }
         skill_ids = session.selected_skills or session.plan.selected_skills or ["interview-coach"]
-        skills = [self._skill_registry.get(skill_id) for skill_id in skill_ids]
+        skills = self._skill_registry.resolve_for_interview(skill_ids)
         system_prompt = self._prompt_loader.render(
             "interview/routing.md",
             {"skill_instructions": "\n\n".join(item.instructions for item in skills)},
@@ -205,7 +236,7 @@ class InterviewQuestionAgent:
         if route.next_topic is None or not route.next_topic.strip():
             raise ValueError("question generation requires a routed topic")
         skill_ids = session.selected_skills or session.plan.selected_skills
-        skills = [self._skill_registry.get(skill_id) for skill_id in skill_ids]
+        skills = self._skill_registry.resolve_for_interview(skill_ids)
         prompt = self._prompt_loader.render(
             "interview/question.md", {"skill_instructions": "\n\n".join(item.instructions for item in skills)}
         )

@@ -8,4 +8,5 @@
 
 Skill 约束：
 {{skill_instructions}}
+上面的 Skill 已由前置 Skill 选择 Agent 从当前实际可用列表中选定。计划必须沿用输入中的 selectedSkills，不得创建、改写或追加其他 Skill ID。
 规划硬约束：questionCount 是系统设置的安全预算（包含开场题和追问），不是候选人输入，也不是必须问满的固定题数，最多 20。PROJECT、FUNDAMENTAL、SCENARIO 的主问题上限为 4，CODING 的主问题上限为 2，单个主问题最多追问 2 次。不要在计划中生成具体问题，只给出阶段、主题和上限；实际数量由每轮“先评估、再路由”动态决定。

@@ -8,13 +8,6 @@ export interface CategoryDTO {
   shared?: boolean;
 }
 
-export interface DisplayDTO {
-  icon: string;
-  gradient: string;
-  iconBg: string;
-  iconColor: string;
-}
-
 export interface SkillDTO {
   id: string;
   name: string;
@@ -22,8 +15,6 @@ export interface SkillDTO {
   categories: CategoryDTO[];
   isPreset: boolean;
   sourceJd: string | null;
-  persona?: string;
-  display?: DisplayDTO;
 }
 
 export const skillApi = {

@@ -11,8 +11,7 @@
       {"key": "database", "label": "数据库", "priority": "NORMAL", "keywords": ["mysql", "postgresql", "数据库", "sql"]},
       {"key": "distributed", "label": "分布式与并发", "priority": "NORMAL", "keywords": ["分布式", "并发", "redis", "kafka"]},
       {"key": "project", "label": "项目深挖", "priority": "ALWAYS_ONE", "keywords": ["项目", "实习", "系统"]}
-    ],
-    "display": {"icon": "Code2", "gradient": "from-orange-500 to-red-500", "iconBg": "bg-orange-100", "iconColor": "text-orange-600"}
+    ]
   },
   {
     "id": "python-backend",
@@ -26,8 +25,7 @@
       {"key": "async", "label": "异步与并发", "priority": "NORMAL", "keywords": ["asyncio", "异步", "并发", "celery"]},
       {"key": "database", "label": "数据库与缓存", "priority": "NORMAL", "keywords": ["postgresql", "mysql", "redis", "sql"]},
       {"key": "project", "label": "项目深挖", "priority": "ALWAYS_ONE", "keywords": ["项目", "实习", "服务"]}
-    ],
-    "display": {"icon": "Terminal", "gradient": "from-blue-500 to-cyan-500", "iconBg": "bg-blue-100", "iconColor": "text-blue-600"}
+    ]
   },
   {
     "id": "frontend",
@@ -41,8 +39,7 @@
       {"key": "browser", "label": "浏览器原理", "priority": "NORMAL", "keywords": ["浏览器", "渲染", "http", "性能"]},
       {"key": "engineering", "label": "工程化", "priority": "NORMAL", "keywords": ["webpack", "构建", "工程化", "测试"]},
       {"key": "project", "label": "项目深挖", "priority": "ALWAYS_ONE", "keywords": ["项目", "实习", "组件"]}
-    ],
-    "display": {"icon": "Layout", "gradient": "from-sky-500 to-indigo-500", "iconBg": "bg-sky-100", "iconColor": "text-sky-600"}
+    ]
   },
   {
     "id": "algorithm",
@@ -55,8 +52,7 @@
       {"key": "algorithm", "label": "算法", "priority": "CORE", "keywords": ["算法", "动态规划", "二分", "回溯", "贪心"]},
       {"key": "complexity", "label": "复杂度", "priority": "NORMAL", "keywords": ["复杂度", "时间复杂度", "空间复杂度"]},
       {"key": "coding", "label": "代码实现", "priority": "NORMAL", "keywords": ["手撕", "编码", "leetcode"]}
-    ],
-    "display": {"icon": "BrainCircuit", "gradient": "from-violet-500 to-purple-500", "iconBg": "bg-violet-100", "iconColor": "text-violet-600"}
+    ]
   },
   {
     "id": "system-design",
@@ -69,8 +65,21 @@
       {"key": "consistency", "label": "一致性", "priority": "CORE", "keywords": ["一致性", "事务", "分布式事务", "幂等"]},
       {"key": "availability", "label": "高可用", "priority": "NORMAL", "keywords": ["高可用", "限流", "熔断", "降级"]},
       {"key": "capacity", "label": "容量与性能", "priority": "NORMAL", "keywords": ["高并发", "性能", "容量", "压测"]}
-    ],
-    "display": {"icon": "Network", "gradient": "from-emerald-500 to-teal-500", "iconBg": "bg-emerald-100", "iconColor": "text-emerald-600"}
+    ]
+  },
+  {
+    "id": "computer-vision",
+    "name": "计算机视觉",
+    "description": "围绕图像处理、检测分割、视觉模型训练、评估与部署进行面试。",
+    "isPreset": true,
+    "sourceJd": null,
+    "categories": [
+      {"key": "image-processing", "label": "图像处理基础", "priority": "CORE", "keywords": ["计算机视觉", "computer vision", "opencv", "图像处理"]},
+      {"key": "detection", "label": "检测与分割", "priority": "CORE", "keywords": ["目标检测", "yolo", "分割", "语义分割", "实例分割"]},
+      {"key": "training", "label": "训练与评估", "priority": "NORMAL", "keywords": ["mAP", "iou", "数据增强", "迁移学习", "模型训练"]},
+      {"key": "vision-deploy", "label": "部署与优化", "priority": "NORMAL", "keywords": ["onnx", "tensorrt", "推理", "量化", "ocr"]},
+      {"key": "project", "label": "项目深挖", "priority": "ALWAYS_ONE", "keywords": ["视觉项目", "图像项目", "算法项目"]}
+    ]
   },
   {
     "id": "ai-agent-dev",
@@ -83,7 +92,6 @@
       {"key": "rag", "label": "RAG", "priority": "CORE", "keywords": ["rag", "检索增强", "向量", "embedding"]},
       {"key": "tool", "label": "Tools 与 MCP", "priority": "NORMAL", "keywords": ["tool", "mcp", "function calling", "技能"]},
       {"key": "memory", "label": "记忆与工程化", "priority": "NORMAL", "keywords": ["记忆", "memory", "评估", "可观测"]}
-    ],
-    "display": {"icon": "Bot", "gradient": "from-fuchsia-500 to-pink-500", "iconBg": "bg-fuchsia-100", "iconColor": "text-fuchsia-600"}
+    ]
   }
 ]

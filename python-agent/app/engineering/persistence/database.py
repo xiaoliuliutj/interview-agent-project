@@ -20,7 +20,7 @@ def create_session_factory(
 
 
 async def create_schema(engine: AsyncEngine) -> None:
-    """开发期建表入口；生产部署将改由 Alembic 迁移执行。"""
+    """创建 Python Agent 自有表；基础设施升级由版本化 SQL 脚本负责。"""
 
     from .interview_session_repository import Base
     from .long_term_memory_repository import LongTermMemoryEntity

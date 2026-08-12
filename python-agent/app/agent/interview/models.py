@@ -102,6 +102,16 @@ class InterviewPlan(BaseModel):
         return next(item for item in self.stages if item.stage == stage)
 
 
+class InterviewSkillSelection(BaseModel):
+    """Model-selected subset of the runtime Skill registry."""
+
+    selected_skills: list[str] = Field(
+        min_length=1, max_length=4, alias="selectedSkills"
+    )
+
+    model_config = {"populate_by_name": True}
+
+
 class InterviewEvaluation(BaseModel):
     """对当前回答的评分结果；该节点不决定面试流程。"""
 
