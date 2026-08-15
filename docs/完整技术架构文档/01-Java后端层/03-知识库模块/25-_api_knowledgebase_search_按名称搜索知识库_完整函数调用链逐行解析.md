@@ -1,78 +1,75 @@
-# GET /api/knowledgebase/search：按名称搜索知识库的完整函数调用链
+# GET /api/knowledgebase/search：按名称搜索知识库完整函数调用链逐行解析
+
+> 当前实现通过 MyBatis 的 `LOWER(name) LIKE` 对当前用户知识库名称做包含搜索，再转换 Redis 状态快照。它不调用 Python、RabbitMQ。
 
 ## 1. 接口定义
 
-接口按 `keyword` 对当前用户的知识库名称执行不区分大小写的包含查询，返回 DTO 列表。它不搜索正文或向量，不调用 Python。
+### 1.1 功能与作用
 
-| 项目 | 内容 |
+`GET /api/knowledgebase/search?keyword=...` 返回名称包含关键词的知识库列表，忽略大小写。搜索范围严格限定当前 `X-User-Id`，结果没有匹配时为空数组。
+
+### 1.2 基本信息
+
+| 项目 | 当前实现 |
 | --- | --- |
-| 方法/路径 | GET `/api/knowledgebase/search?keyword=...` |
-| 匹配字段 | name containing ignore case |
-| 返回 | `ApiResult<List<KnowledgeBaseView>>` |
-| Python 调用 | 无 |
+| 路径 | `GET /api/knowledgebase/search?keyword=` |
+| Controller | `KnowledgeBaseController.search`，`KnowledgeBaseController.java:102-106` |
+| SQL | `LOWER(name) LIKE CONCAT('%',LOWER(#{keyword}),'%')` |
+| Python/MQ | 无调用 |
+
+### 1.3 前端入口
+
+`knowledgeBaseApi.search` 位于 `frontend/src/api/knowledgebase.ts:145-147`，对 keyword 做 URL 编码后请求。
 
 ## 2. 函数调用链
 
-~~~text
-KnowledgeBaseManagePage.loadData → knowledgeBaseApi.search
- -> encodeURIComponent → request.get → Axios/Filter
- -> KnowledgeBaseController.search
- -> KnowledgeBaseService.search → UserIdentityResolver.require
- -> Repository.findByOwnerIdAndNameContainingIgnoreCase → toView
- -> ApiResult.success → setKnowledgeBases
-~~~
+```text
+knowledgeBaseApi.search -> request.get -> Axios interceptor
+  -> RequestIdFilter -> SimpleRateLimitFilter -> IdempotencyFilter(GET skip)
+  -> KnowledgeBaseController.search -> KnowledgeBaseService.search
+     -> UserIdentityResolver.require -> KnowledgeBaseRepository.findByOwnerIdAndNameContainingIgnoreCase
+        -> XML SQL -> KnowledgeBaseService.toView -> JavaTaskStatusCache.knowledgeBaseIndex
+  -> ApiResult.success
+```
 
 ## 3. 函数解析
 
-### 3.1 前端函数
+### 3.1 前端、过滤器与 Controller 函数
 
-#### 3.1.1 `knowledgeBaseApi.search`
+#### 3.1.1 `knowledgeBaseApi.search` 与 request
 
-文件：`frontend/src/api/knowledgebase.ts:145-147`。
+**文件与行号：** `frontend/src/api/knowledgebase.ts:145-147`，`frontend/src/api/request.ts:47-72、123-164`。
 
-1. 第 145 行接收 keyword 并声明数组返回。
-2. 第 146 行 encodeURIComponent 后拼入 query string，再调用 request.get；第 147 行结束。
-3. ManagePage.loadData/loadDataSilent 在 searchKeyword.trim() 非空时选择此函数，成功后 setKnowledgeBases。
+1. 第 146 行调用 `encodeURIComponent(keyword)`，再 GET `/search?keyword=`；第 147 行结束。
+2. request.ts 生成/复用用户 ID、写身份/追踪头、解包 Java success；错误拦截器处理网络和业务错误。RequestId、限流与 GET 幂等跳过继续沿用 infrastructure filter。
 
-#### 3.1.2 `request.get` 与拦截器
+#### 3.1.2 `KnowledgeBaseController.search`
 
-文件：`frontend/src/api/request.ts:47-73、123-160`。
+**文件与行号：** `KnowledgeBaseController.java:102-106`。
 
-1. request.get 第 158-160 行调用 Axios GET 并取 data。
-2. createClientId/currentUserId 第 47-58 行提供 requestId/owner；请求拦截器第 64-73 行写请求头。
-3. 响应拦截器第 123-155 行解包 code=200 或生成服务/网络异常。
+1. 第 102 行映射 search；第 103 行绑定必需 keyword；第 104 行绑定用户头。
+2. 第 105 行调用 service 并 success 包装列表；第 106 行结束。
 
-### 3.2 Java 函数
+### 3.2 Java 搜索、Mapper 与视图函数
 
-#### 3.2.1 `KnowledgeBaseController.search`
+#### 3.2.1 `KnowledgeBaseService.search`
 
-文件：`java-backend/src/main/java/com/interviewguide/knowledgebase/controller/KnowledgeBaseController.java:102-106`。
+**文件与行号：** `KnowledgeBaseService.java:210-212`。
 
-1. 第 102 行映射 GET `/search`；第 103-104 行绑定必填 keyword 与用户头。
-2. 第 105 行调用 service.search 并 success；第 106 行结束。缺 keyword 由 Spring 参数绑定拒绝。
+1. 第 211 行先 `identity.require(userId)`，再调用 Mapper，逐项用 `toView` 转换并 `toList`。
+2. 第 212 行结束。关键词未在 Java 手工拼接 SQL，避免把用户输入直接作为 SQL 片段。
 
-#### 3.2.2 `KnowledgeBaseService.search`
+#### 3.2.2 Mapper SQL、`toView` 与 Redis 回退
 
-文件：`java-backend/src/main/java/com/interviewguide/knowledgebase/service/KnowledgeBaseService.java:198-200`。
+**文件与行号：** `KnowledgeBaseRepository.java` 的同名方法，`resources/mapper/knowledgebase/KnowledgeBaseRepository.xml:7`，`KnowledgeBaseService.java:237-250`。
 
-1. 第 198 行定义函数。
-2. 第 199 行 identity.require 后调用 `findByOwnerIdAndNameContainingIgnoreCase(owner,keyword)`，再 stream.map(toView).toList。
-3. 第 200 行结束。Service 不 trim/拒绝空 keyword；传空串时数据库包含匹配通常返回当前用户全部名称。
+1. XML 第 7 行同时限制 owner_id，并用 LOWER/LIKE 做大小写不敏感包含匹配。
+2. `toView` 第 238-242 行从 Java task cache 读取 status/error，缓存空或类型错误时回退实体字段；第 243-249 行复制其余元数据；第 250 行结束。
 
-#### 3.2.3 `require`、Repository 与 `toView`
+## 4. 主流构建分析
 
-文件：`common/security/UserIdentityResolver.java:14-19`；`KnowledgeBaseRepository.java:10-26`；`KnowledgeBaseService.java:225-233`。
+当前 `LIKE '%keyword%'` 简单易用，但前缀通配符通常无法使用普通 B-tree 索引，数据量大时会全表扫描；关键词为空还可能匹配全部名称。
 
-1. require 第 15-19 行拒绝空用户、strip 并返回 owner。
-2. Repository 方法名声明 owner 限定、name 包含和 ignore-case 语义；实际 SQL 由 Spring Data 生成。
-3. toView 第 225-233 行逐项读取实体字段构造 KnowledgeBaseView。
+主流方案是 PostgreSQL `pg_trgm` + GIN 索引，或 Elasticsearch/OpenSearch 的全文索引。trigram 改造小、支持包含匹配；搜索引擎功能强但引入同步、运维和最终一致性。
 
-### 3.3 Python 边界
-
-1. 此处“search”是 Java 数据库名称查询，不是 `RagService.search`。
-2. 调用链不含 PythonAgentClient、RAG embedding/vector repository 或 `/v1/**`，Java→Python 次数为零。
-
-## 4. 审核结论
-
-1. 已覆盖前端关键字编码、Java 用户限定、不区分大小写包含查询和 DTO 投影。
-2. 已明确它不是向量检索；所有项目函数均注明文件/行号，确认不调用 Python。
+本项目数据量较小时保留当前实现，并在入口拒绝/限制空关键词长度。规模增长时优先启用 `pg_trgm`：建 `CREATE INDEX ... USING gin (name gin_trgm_ops)`，保持现有 Mapper 语义；只有需要分词、拼写和排序时再引入搜索引擎。

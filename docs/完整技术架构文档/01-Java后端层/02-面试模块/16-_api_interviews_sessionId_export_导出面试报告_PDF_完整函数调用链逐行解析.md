@@ -1,104 +1,88 @@
-# GET /api/interviews/{sessionId}/export：导出面试报告 PDF 的完整函数调用链
+# GET /api/interviews/{sessionId}/export：导出面试报告 PDF 完整函数调用链逐行解析
+
+> 当前导出在 Java 线程内使用 PDFBox 生成字节流；它先读/授权面试详情，再调用报告服务。不会调用 Python 或 RabbitMQ。
 
 ## 1. 接口定义
 
-接口从 Java 已保存的面试详情生成候选人可见的 PDF 报告：会话基本信息、每轮问题/回答/评价和最终评价。PDFBox 在 Java 内存中生成 `byte[]`；不调用 Python、RAG 或模型。
+### 1.1 功能与作用
 
-| 项目 | 内容 |
+接口将面试状态、题数、最终评价和每轮问答导出为 PDF 附件。报告服务尝试配置的 CJK 字体及候选字体路径；没有可用字体或 PDF 写入失败时返回业务错误，而不是输出不可读文件。
+
+### 1.2 基本信息
+
+| 项目 | 当前实现 |
 | --- | --- |
-| 方法/路径 | GET `/api/interviews/{sessionId}/export` |
-| Controller | `InterviewController.export` |
-| 输出 | `ResponseEntity<byte[]>`，application/pdf |
-| Service | `InterviewService.detail`、`InterviewReportPdfService.render` |
-| Python 调用 | 无 |
+| 路径 | `GET /api/interviews/{sessionId}/export` |
+| Controller | `InterviewController.export`，`InterviewController.java:95-104` |
+| 响应 | `application/pdf` + attachment `interview-{sessionId}.pdf` |
+| 输入数据 | 详情 session/turns，PDF 字体配置 `agent.pdf-font-path` |
+| Python/MQ | 无调用；使用已经持久化的报告数据。|
+
+### 1.3 前端入口
+
+`InterviewHistoryPage` 调用 `historyApi.exportInterviewPdf`；API 位于 `frontend/src/api/history.ts:96-99`，以 Blob 读取文件。
 
 ## 2. 函数调用链
 
-~~~text
-InterviewHistoryPage.exportPdf → historyApi.exportInterviewPdf
- -> request.getInstance().get(blob) → Axios 请求拦截器
- -> RequestIdFilter → SimpleRateLimitFilter
- -> InterviewController.export → UserIdentityResolver.require
- -> InterviewService.detail → ownedSession/load → turns → toView/parseFinalEvaluation
- -> InterviewReportPdfService.render
-    -> fontCandidates → renderWithFont
-       -> reportLines → addPages → wrap
- -> ResponseEntity.ok/contentType/header/body
- -> Blob URL 下载
-~~~
+```text
+historyApi.exportInterviewPdf -> Axios get(blob) -> request interceptor
+  -> RequestIdFilter -> SimpleRateLimitFilter -> IdempotencyFilter(GET skip)
+  -> InterviewController.export -> UserIdentityResolver.require -> InterviewService.detail
+     -> ownedSession/load/turns -> MyBatis session/turn SQL -> toView/parseFinalEvaluation
+  -> InterviewReportPdfService.render
+     -> fontCandidates -> renderWithFont -> reportLines -> addPages -> wrap
+  -> ResponseEntity<byte[]> -> browser Blob download
+```
 
 ## 3. 函数解析
 
-### 3.1 前端函数
+### 3.1 前端与 HTTP 入口函数
 
-#### 3.1.1 `InterviewHistoryPage.exportPdf`
+#### 3.1.1 `historyApi.exportInterviewPdf` 和 Axios Blob 请求
 
-文件：`frontend/src/pages/InterviewHistoryPage.tsx:62-75`。
+**文件与行号：** `frontend/src/api/history.ts:96-99`，`frontend/src/api/request.ts:47-72、123-154`。
 
-1. 第 62 行定义异步导出函数；第 63 行记录正在导出的 sessionId。
-2. 第 65 行 await `historyApi.exportInterviewPdf`；第 66 行创建 Blob URL；第 67-70 行创建锚点、赋 href/download、click 触发下载。
-3. 第 71 行 revoke 临时 URL；第 72-74 行 finally 清空 exporting，无论成功失败均恢复按钮。
+1. API 第 96 行声明 Blob 导出；第 97 行底层 Axios GET 设 `responseType: blob` 和 `skipResultTransform`；第 98 行返回 byte Blob。
+2. 请求拦截器第 47-72 行生成/读取客户端用户 ID、写 X-User-Id 和 X-Request-Id。PDF Blob 不含 code，成功拦截器第 125-134 行原样放行；失败拦截器第 136-154 行可解码 Blob 错误体。
 
-#### 3.1.2 `historyApi.exportInterviewPdf` 和 Axios
+#### 3.1.2 RequestId、限流和 `InterviewController.export`
 
-文件：`frontend/src/api/history.ts:96-99`；`api/request.ts:47-73、123-155、180-182`。
+**文件与行号：** `RequestIdFilter.java:23-41`、`SimpleRateLimitFilter.java:48-82`、`IdempotencyFilter.java:41-44`，目录 `java-backend/src/main/java/com/interviewguide/infrastructure/`；`InterviewController.java:95-104`。
 
-1. 第 96 行声明 Blob 返回；第 97 行从 getInstance 取得共享 Axios，GET export 路径并要求 `responseType:'blob'`、`skipResultTransform:true`；第 98 行返回 response.data。
-2. getInstance 第 180-182 行返回 instance；请求拦截器第 64-73 行写 X-User-Id/X-Request-Id。
-3. 成功响应拦截器第 124-134 行发现 Blob 不含 code，原样返回；失败回调第 136-153 行把 JSON Blob/HTTP 错误转成 ApiRequestError。
+1. RequestId filter 规范/回传 ID、MDC 清理；限流用 Redis INCR 或本机回退并可返回 429；GET 被幂等过滤器跳过。
+2. Controller 第 95-97 行绑定 sessionId/用户头；第 98 行调用 `detail` 取得已授权详情；第 99-100 行把报告服务需要的 ID、状态、题数、turns、最终评价传给 `render`。
+3. 第 101-103 行创建 PDF content-type、附件头和 body；第 104 行结束。不存在 `ApiResult` 包装。
 
-### 3.2 Java 详情读取函数
+### 3.2 详情读取与 PDF 构建函数
 
-#### 3.2.1 `InterviewController.export`
+#### 3.2.1 `InterviewService.detail`、`ownedSession`、`turns` 与 `toView`
 
-文件：`java-backend/src/main/java/com/interviewguide/interview/controller/InterviewController.java:95-104`。
+**文件与行号：** `InterviewService.java:112-123、185-191、238-257`，`InterviewSessionPersistenceService.java:185-191`。
 
-1. 第 95 行映射 export；第 96-97 行绑定 sessionId/用户头。
-2. 第 98 行 require 后调用 detail，保证报告经过相同归属校验。
-3. 第 99-100 行调用 reportPdfService.render，传 status、总题数、turns 和 finalEvaluation。
-4. 第 101-103 行创建 200、PDF MIME、附件文件名 `interview-{id}.pdf` 和内容；第 104 行结束。
+1. `detail` 第 113 行先 `ownedSession`；第 114-115 行读取 turns；第 116-121 行按时间顺序转为 indexed turn；第 122 行返回详情。
+2. `ownedSession` 调用 load/owner 校验。`load` 第 189-191 行 MyBatis 查 session，turns 第 185-187 行 MyBatis 按 session/time 查 turn。
+3. `toView` 第 238-248 行复制会话字段并调用 `parseFinalEvaluation`；后者第 249-257 行空/非法 JSON 返回空 Map。所有读取不调用 Python。
 
-#### 3.2.2 `InterviewService.detail` 及其下游
+#### 3.2.2 `InterviewReportPdfService.render` 与字体函数
 
-文件：`InterviewService.java:112-123、185-191、238-255`；`InterviewSessionPersistenceService.java:179-186`。
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/interview/service/InterviewReportPdfService.java:35-87`。
 
-1. detail 第 113 行 ownedSession；第 114-115 行读取 turns；第 116-121 行按顺序映射 InterviewTurnView；第 122 行构造 InterviewDetailView。
-2. ownedSession 第 186-190 行 load 后比较 getUserId；load 第 183-186 行按主键查会话或抛 SESSION_NOT_FOUND。
-3. turns 第 179-181 行按 createdAt 查回合；toView 第 238-247 行读取会话字段；parseFinalEvaluation 第 249-255 行空值为 null、JSON 失败也返回 null。
+1. `render` 第 35 行接收报告输入；它调用 `fontCandidates` 获得配置字体及候选路径，逐一尝试 `renderWithFont`，成功即返回 bytes，失败记录/继续尝试，全部失败抛出报告导出错误。
+2. `fontCandidates` 第 52-63 行收集配置路径和运行环境候选 CJK 字体，过滤不存在/重复路径，保证 Unicode 字符有字体支持。
+3. `renderWithFont` 第 64-87 行创建 PDF/输出流、加载 Type0 字体、调用 `reportLines` 和 `addPages`，保存后返回 bytes；IOException 被上层转换为业务错误。
 
-### 3.3 PDF 生成函数
+#### 3.2.3 `reportLines`、`addPages` 与 `wrap`
 
-#### 3.3.1 `InterviewReportPdfService.render` 与 `fontCandidates`
+**文件与行号：** `InterviewReportPdfService.java:88-`。
 
-文件：`java-backend/src/main/java/com/interviewguide/interview/service/InterviewReportPdfService.java:36-63`。
+1. `reportLines` 把 session ID、状态、题目数量、最终评价和每个 turn 格式化为报告文本行；null 评价/回答以安全空文本处理。
+2. `addPages` 根据页面行容量创建/关闭 PDF content stream，设置字体、字号、行距和起点，再逐行写出；满页后新建页。
+3. `wrap` 将超长文本分段，避免 PDF 单行溢出。三者均只处理内存文本，不读数据库或网络。
 
-1. render 第 38 行取 fontCandidates；第 39-42 行无可用 CJK 字体则抛 INTERVIEW_PDF_FONT_REQUIRED。
-2. 第 43-49 行逐个尝试 renderWithFont，IOException 时记录警告并继续；第 50 行全部失败抛 INTERVIEW_PDF_EXPORT_FAILED。
-3. fontCandidates 第 54 行创建列表；第 55 行加入配置字体；第 56-61 行检查三个系统 Noto 路径、去重后加入；第 62 行返回。
+## 4. 主流构建分析
 
-#### 3.3.2 `renderWithFont`
+同步 PDFBox 导出优点是无额外基础设施、报告与当前详情一致；缺点是长报告在 Web 线程中占内存，字体探测依赖容器镜像，固定文本换行不具备专业排版。
 
-文件：`InterviewReportPdfService.java:65-88`。
+主流替代是异步导出到对象存储或使用模板/HTML-to-PDF 渲染服务。优点是可扩容、易做复杂样式和下载链接；缺点是引入队列、对象存储、模板安全和任务清理。
 
-1. 第 67 行声明 TTC collection；第 68 行 try-with-resources 创建 PDDocument 与内存输出流。
-2. 第 70-80 行按扩展名加载 TTC 首字体或普通字体；TTC 为空第 74-76 行抛 IOException。
-3. 第 82 行调用 reportLines/addPages；第 83-84 行保存并返回 byte[]。
-4. 第 85-87 行 finally 关闭 collection，避免 TTC 文件句柄泄露。
-
-#### 3.3.3 `reportLines`、`addPages`、`wrap`
-
-文件：`InterviewReportPdfService.java:90-160`。
-
-1. reportLines 第 92-98 行加入报告标题/会话信息；第 99-108 行对每个 turn 加阶段、问题、回答和非空评价；第 109-116 行有最终评价时加入分数、摘要、优缺点、建议；第 117 行返回。
-2. addPages 第 121-143 行逐条 wrap；每页达到 48 行时第 126-137 行关闭旧 stream、新建页、设置字体/行距/坐标；第 139-141 行写文本和换行；第 144-149 行 finally 关闭最后 stream。
-3. wrap 第 153-160 行将 null 变空串、替换 CR/LF，循环按 55 字符切行，并加入最后剩余行。
-
-### 3.4 Python 边界
-
-1. export 的 Controller 下游只有 detail 和 render；detail 查询 Java Repository，render 使用 PDFBox。
-2. 源码没有 PythonAgentClient、HttpPythonAgentClient 或 `/v1/**` 调用，因此 Java→Python 次数为零。
-
-## 4. 审核结论
-
-1. 已覆盖 Blob 下载、授权详情读取、字体选择、PDF 文本分页和二进制响应。
-2. 每个项目定义的可达函数均标明文件、行号及逐句作用；接口不调用 Python。
+本项目小规模时可保持当前实现。部署稳定后应在镜像中明确安装/挂载 CJK 字体；大报告场景可复用 Outbox 任务与 MinIO，报告生成后返回短期下载 URL，并保留当前 detail 授权校验。

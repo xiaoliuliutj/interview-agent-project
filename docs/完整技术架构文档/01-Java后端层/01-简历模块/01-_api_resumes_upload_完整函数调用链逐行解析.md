@@ -1,685 +1,406 @@
-# POST /api/resumes/upload：简历上传到 Python Agent 的完整函数调用链
+# POST /api/resumes/upload：简历上传、异步分析与 Python 调用完整解析
 
-> 本文严格依据当前仓库源码编写，分析第一个 Java 后端接口。行号以当前工作区文件为准。同步 HTTP 请求和返回响应后的 RabbitMQ 异步链分别说明，避免把异步任务误写成同步调用。
+> 本文以当前工作区代码为准。行号均为文中列出的源文件当前行号；不把 Spring、MyBatis、RabbitMQ、Axios、PostgreSQL 或模型 SDK 内部实现误写成项目自定义函数。上传请求同步返回的是“已创建并已投递”的分析任务；真正的 Python 调用发生在 RabbitMQ 消费端。
 
 ## 1. 接口定义
 
 ### 1.1 功能与作用
 
-该接口接收用户上传的简历文件和目标岗位，完成用户身份校验、文件合法性检查、文件内容解析、候选人及简历版本持久化，并创建一条 PENDING 的简历分析记录。分析不会在浏览器请求线程中等待模型完成，而是通过 RabbitMQ 投递任务；Java 在任务入队后立即返回 resumeId、原始文本和分析状态。随后消费者异步调用 Python 的简历记忆激活与简历评价端点。
+该接口接收浏览器提交的简历文件和目标岗位，完成身份键校验、文件哈希计算、同一候选人的重复文件识别、简历版本写入、分析任务创建与 RabbitMQ 投递。Java 不在 HTTP 线程中等待大模型结果。任务消费者随后先调用 Python 的“激活简历记忆”接口，再调用“简历评估”接口；结果写入 Java 的 `resume_analyses` 表，并在数据库事务提交后更新 Java 专属 Redis 状态快照。
 
 ### 1.2 基本信息
 
-| 项目 | 内容 |
+| 项目 | 当前实现 |
 | --- | --- |
-| HTTP 方法 | POST |
-| 完整路径 | /api/resumes/upload |
-| Java Controller | ResumeController.upload |
-| 类级映射 | /api/resumes |
-| 方法级映射 | /upload |
-| 请求类型 | multipart/form-data |
-| 必填 part | file、targetRole |
-| 可选请求头 | X-User-Id（业务层实际要求非空） |
-| 成功返回 | ApiResult<Map<String,Object>>，分析初始状态为 PENDING |
-| Python 调用 | /v1/agent/resume/activate、/v1/agent/evaluate/resume |
+| HTTP 方法与路径 | `POST /api/resumes/upload` |
+| Controller | `ResumeController.upload`，`java-backend/src/main/java/com/interviewguide/resume/controller/ResumeController.java:32-37` |
+| 请求类型 | `multipart/form-data` |
+| 必填 Part | `file`、`targetRole` |
+| 身份头 | `X-User-Id`；Controller 可缺省接收，但 `UserIdentityResolver.require` 会拒绝空值 |
+| 追踪头 | 前端自动写入 `X-Request-Id`；Java 在响应头回传它 |
+| 可选幂等头 | `X-Idempotency-Key`；只有客户端提供时才进入 `IdempotencyFilter` |
+| 同步成功响应 | `ApiResult`，其中 `storage.resumeId` 与 `analysis.analysisId` 可供前端后续查询 |
+| 同步完成边界 | RabbitMQ 消息已由 `ResumeAnalysisWorker.enqueue` 发出；不代表 Python 已完成 |
+| 异步 Python 路径 | `POST /v1/agent/resume/activate`，再到 `POST /v1/agent/evaluate/resume` |
+| 数据库访问方式 | MyBatis Mapper：`CandidateRepository.xml`、`ResumeRepository.xml`、`ResumeAnalysisRepository.xml`；没有 JPA Repository |
+| Redis 所有权 | Java 专属 `redis-java`；任务状态键为 `java:task:resume-analysis:*`，PostgreSQL 仍是最终事实来源 |
 
-### 1.3 前端入口
+### 1.3 前端访问入口
 
-用户在 UploadPage 选择岗位和文件，FileUploadCard.handleUpload 把文件交给 UploadPage.handleUpload，后者调用 resumeApi.uploadAndAnalyze。请求封装 request.upload 使用 multipart POST，并由拦截器添加 X-User-Id 与 X-Request-Id。
+前端入口是 `frontend/src/pages/UploadPage.tsx`。页面把 `FileUploadCard` 的 `onUpload` 回调绑定为 `handleUpload`，再由 `resumeApi.uploadAndAnalyze` 发送请求。`frontend/src/api/request.ts` 的 Axios 请求拦截器为每次请求补充 `X-User-Id` 和 `X-Request-Id`。当前前端没有为上传接口默认生成 `X-Idempotency-Key`，因此幂等过滤器在普通页面请求中会跳过；接口调用方可以显式补充该头启用幂等保护。
 
 ## 2. 函数调用链
 
-### 2.1 同步 HTTP 链
+### 2.1 浏览器到 Java 同步链
 
-~~~text
+```text
 FileUploadCard.handleUpload
- -> UploadPage.handleUpload
- -> resumeApi.uploadAndAnalyze
- -> request.upload
- -> Axios request interceptor
-    -> currentUserId -> createClientId
- -> RequestIdFilter.doFilterInternal -> normalize
- -> SimpleRateLimitFilter.doFilterInternal
- -> ResumeController.upload
- -> ResumeService.upload
-    -> UserIdentityResolver.require
-    -> ResumeFileStorageService.inspect -> sha256
-    -> CandidateRepository.findByUserId
-       ->（无候选人）BusinessIdGenerator.next -> CandidateRepository.save
-    -> ResumeRepository.findFirstByCandidateIdAndFileHash
-    ->（新文件）ResumeRepository.findByCandidateId
-    -> ResumeRepository.findFirstByCandidateIdOrderByVersionDesc
-    -> BusinessIdGenerator.next
-    -> Tika.parseToString
-    -> ResumeFileStorageService.store
-    -> ResumeEntity.attachFile -> ResumeRepository.save
-    -> ResumeAnalysisService.cancelActiveForResumeIds
-    -> CandidateEntity.setCurrentResumeId -> CandidateRepository.save
-    -> ResumeAnalysisService.submit
-       -> requiredResume -> CandidateRepository.findById
-       -> ResumeAnalysisPersistenceService.cancelActiveForResumeIds
-       -> ResumeAnalysisPersistenceService.create
-          -> new ResumeAnalysisEntity -> ResumeAnalysisRepository.save
-       -> ResumeAnalysisWorker.enqueue
-          -> new AgentWorkTaskMessage -> RabbitTemplate.convertAndSend
- -> ApiResult.success
- -> Axios response interceptor -> request.upload Promise
- -> UploadPage.handleUpload 成功/异常/finally 分支
-~~~
+  -> UploadPage.handleUpload
+  -> resumeApi.uploadAndAnalyze
+  -> request.upload
+  -> Axios request interceptor
+     -> currentUserId -> createClientId
+  -> RequestIdFilter.doFilterInternal -> normalize
+  -> SimpleRateLimitFilter.doFilterInternal
+     -> JavaRedisStore.incrementInFixedWindow
+     -> （Redis 不可用）ConcurrentHashMap 本地窗口分支
+  -> IdempotencyFilter.shouldNotFilter
+     -> （带 X-Idempotency-Key）IdempotencyFilter.doFilterInternal
+        -> JavaRedisStore.acquire
+        -> （Redis 不可用）fallback.putIfAbsent
+  -> ResumeController.upload
+  -> ResumeService.upload
+     -> UserIdentityResolver.require
+     -> ResumeFileStorageService.inspect -> sha256
+     -> CandidateRepository.findByUserId
+        -> （无候选人）BusinessIdGenerator.next -> CandidateRepository.save -> CandidateRepository.upsert SQL
+     -> ResumeRepository.findFirstByCandidateIdAndFileHash
+     -> （重复文件）CandidateEntity.setCurrentResumeId -> CandidateRepository.save
+        -> ResumeAnalysisService.cancelActiveForResumeIds
+        -> ResumeAnalysisService.submit
+     -> （新文件）ResumeRepository.findByCandidateId
+        -> ResumeRepository.findFirstByCandidateIdOrderByVersionDesc
+        -> BusinessIdGenerator.next
+        -> Tika.parseToString（第三方库）
+        -> ResumeFileStorageService.store
+        -> ResumeEntity.attachFile -> ResumeRepository.save -> ResumeRepository.upsert SQL
+        -> ResumeAnalysisService.cancelActiveForResumeIds
+        -> CandidateEntity.setCurrentResumeId -> CandidateRepository.save
+        -> ResumeAnalysisService.submit
+           -> requiredResume -> ResumeRepository.findById
+           -> CandidateRepository.findById
+           -> ResumeAnalysisPersistenceService.cancelActiveForResumeIds
+           -> ResumeAnalysisPersistenceService.create
+              -> ResumeAnalysisEntity.<init> -> ResumeAnalysisRepository.save/insert SQL
+              -> cacheAfterCommit -> JavaTaskStatusCache.updateResumeAnalysis -> JavaRedisStore.putJson
+           -> ResumeAnalysisWorker.enqueue -> RabbitTemplate.convertAndSend
+           -> ResumeAnalysisService.toView -> stringList/mapList
+  -> ApiResult.success
+  -> Axios response interceptor -> UploadPage.handleUpload 的成功或失败分支
+```
 
-### 2.2 异步 RabbitMQ 到 Python 链
+### 2.2 RabbitMQ 到 Python 异步链
 
-~~~text
+```text
 RabbitAgentWorkConsumer.consume
- -> ResumeAnalysisWorker.process
-    -> ResumeAnalysisRepository.findById
-    -> ResumeAnalysisEntity.isCancelled
-    -> ResumeRepository.findById
-    -> isCurrentResume -> CandidateRepository.findById
-    -> ResumeAnalysisPersistenceService.beginAttempt
-       -> required -> canBeginAttempt -> beginAttempt
-    -> new AgentResumeMemoryActivationRequest
-    -> HttpPythonAgentClient.activateResumeMemory
-       -> AgentCallExecutor.execute -> HttpPythonAgentClient.post
-          -> validateRequest -> RestClient POST /v1/agent/resume/activate
-    -> Python activate_resume_memory
-       -> _remember_request_context -> _resolve_memory_service
-       -> build_memory_service -> create_session_factory -> create_engine
-       -> MemoryService.activate_resume
-          -> _resume_activation_fingerprint -> repository.get
-          -> repository.create 或 repository.save
-       -> new AgentResponse
-    -> requireMatchingResponse -> requireSuccess -> AgentResponse.retryable
-    -> new AgentResumeEvaluateRequest
-    -> HttpPythonAgentClient.evaluateResume
-       -> AgentCallExecutor.execute -> post -> validateRequest
-       -> RestClient POST /v1/agent/evaluate/resume
-    -> Python evaluate_resume
-       -> _remember_request_context -> _resume_evaluation_fingerprint
-       -> _resolve_memory_service -> get_resume_evaluation_run
-       ->（无缓存）_resolve_resume_evaluator -> build_resume_evaluation_agent
-       -> ResumeEvaluationAgent.evaluate
-          -> SkillRegistry.get -> PromptLoader.render -> PromptLoader.load/_resolve
-          -> StructuredOutputInvoker.invoke
-             -> schema.model_json_schema -> _few_shot_output
-             -> _invoke_model -> AsyncRetryExecutor.execute -> model.ainvoke
-             -> _validate -> _content_as_text -> _strip_json_fence
-             -> ResumeEvaluation.model_validate
-       -> MemoryService.record_resume_analysis -> repository.get/save
-       -> new AgentResponse
-~~~
+  -> ResumeAnalysisWorker.process
+     -> ResumeAnalysisRepository.findById
+     -> ResumeAnalysisEntity.isCancelled
+     -> ResumeRepository.findById
+     -> ResumeAnalysisWorker.isCurrentResume -> CandidateRepository.findById
+     -> ResumeAnalysisPersistenceService.beginAttempt
+        -> required -> ResumeAnalysisRepository.findById
+        -> ResumeAnalysisEntity.canBeginAttempt -> beginAttempt
+        -> ResumeAnalysisRepository.save/update SQL -> cacheAfterCommit
+     -> HttpPythonAgentClient.activateResumeMemory
+        -> AgentCallExecutor.execute -> HttpPythonAgentClient.post -> validateRequest
+        -> HTTP POST /v1/agent/resume/activate
+        -> Python activate_resume_memory
+           -> _remember_request_context -> _resolve_memory_service
+           -> build_memory_service -> create_session_factory（装配）
+           -> MemoryService.activate_resume -> _resume_activation_fingerprint
+              -> LongTermMemoryRepository.get/create/save
+     -> ResumeAnalysisWorker.requireMatchingResponse -> requireSuccess
+     -> HttpPythonAgentClient.evaluateResume
+        -> AgentCallExecutor.execute -> post -> validateRequest
+        -> HTTP POST /v1/agent/evaluate/resume
+        -> Python evaluate_resume
+           -> _remember_request_context -> _resume_evaluation_fingerprint
+           -> _resolve_memory_service -> MemoryService.get_resume_evaluation_run
+           -> （未命中）_resolve_resume_evaluator -> build_resume_evaluation_agent
+              -> ResumeEvaluationAgent.evaluate
+                 -> SkillRegistry.get -> PromptLoader.render
+                 -> StructuredOutputInvoker.invoke -> AsyncRetryExecutor.execute -> LLM 调用
+           -> MemoryService.record_resume_analysis -> LongTermMemoryRepository.save
+           -> AgentResponse
+     -> ResumeAnalysisWorker.requireMatchingResponse
+     -> ResumeAnalysisPersistenceService.complete 或 cancel/fail/recordRetryableFailure
+        -> ResumeAnalysisEntity 状态函数 -> ResumeAnalysisRepository.update SQL
+        -> cacheAfterCommit -> JavaTaskStatusCache.updateResumeAnalysis
+```
 
 ## 3. 函数解析
 
 ### 3.1 前端函数
 
-#### 3.1.1 FileUploadCard.handleUpload
+#### 3.1.1 `FileUploadCard.handleUpload`
+
+**文件与行号：** `frontend/src/components/FileUploadCard.tsx:87-90`。
+
+1. 第 87 行声明无参点击处理函数；它闭包读取组件状态 `selectedFile` 与 `name`。
+2. 第 88 行在尚未选择文件时直接返回，避免把 `null` 传给父组件。
+3. 第 89 行调用传入的 `onUpload`；第一个参数是文件对象，第二个参数会先 `trim`，空名称变为 `undefined`。简历页面不启用名称输入框，因此 `UploadPage` 只接收第一个参数。
+4. 第 90 行结束函数。点击按钮的 JSX 位于同文件第 269-285 行，第 271 行把该函数绑定到按钮。
 
-文件：frontend/src/components/FileUploadCard.tsx:87-90。
+#### 3.1.2 `UploadPage.handleUpload`
 
-~~~tsx
-const handleUpload = () => {
-  if (!selectedFile) return;
-  onUpload(selectedFile, name.trim() || undefined);
-};
-~~~
-
-1. 第 87 行定义点击处理函数，读取 selectedFile 和 name 状态。
-2. 第 88 行没有选中文件时立即返回，防止向父组件提交空文件。
-3. 第 89 行调用父组件 onUpload；文件作为第一个参数，名称 trim 后为空则转为 undefined。简历页只使用 File 参数。
-
-#### 3.1.2 UploadPage.handleUpload
-
-文件：frontend/src/pages/UploadPage.tsx:13-29。
-
-~~~tsx
-const handleUpload = async (file: File) => {
-  if (!targetRole.trim()) {
-    setError('请先填写目标岗位');
-    return;
-  }
-  setUploading(true);
-  setError('');
-  try {
-    const data = await resumeApi.uploadAndAnalyze(file, targetRole.trim());
-    if (!data.storage?.resumeId) throw new Error('上传未返回简历标识');
-    onUploadComplete(data.storage.resumeId);
-  } catch (error) {
-    setError(getErrorMessage(error));
-  } finally {
-    setUploading(false);
-  }
-};
-~~~
-
-1. 第 13 行声明异步函数，参数是浏览器 File。
-2. 第 14-17 行 trim 岗位，空岗位通过 setError 写提示并 return，浏览器不会发请求。
-3. 第 18 行设置 uploading=true，使控件进入处理中状态；第 19 行清空旧错误。
-4. 第 21 行调用 resumeApi.uploadAndAnalyze 并等待网络 Promise；岗位在发送前再次 trim。
-5. 第 22 行检查后端 data.storage.resumeId；缺失时主动抛 Error，拒绝不完整响应。
-6. 第 23 行把 resumeId 交给 onUploadComplete；App 包装器随后导航历史页。此时只代表 Java 已受理 PENDING 任务。
-7. 第 24-25 行捕获网络、HTTP 或业务错误，getErrorMessage 取可显示文本。
-8. 第 26-28 行 finally 无论结果如何恢复 uploading=false。
-
-#### 3.1.3 resumeApi.uploadAndAnalyze
-
-文件：frontend/src/api/resume.ts:8-13。
-
-~~~ts
-async uploadAndAnalyze(file: File, targetRole: string): Promise<UploadResponse> {
-  const formData = new FormData();
-  formData.append('file', file);
-  formData.append('targetRole', targetRole);
-  return request.upload<UploadResponse>('/api/resumes/upload', formData);
-}
-~~~
+**文件与行号：** `frontend/src/pages/UploadPage.tsx:13-29`。
 
-1. 第 8 行声明上传 API 并约束返回类型。
-2. 第 9 行创建 FormData。
-3. 第 10 行追加 file，字段名必须对应 Java 的 @RequestPart("file")。
-4. 第 11 行追加 targetRole，字段名必须对应 @RequestPart("targetRole")。
-5. 第 12 行调用 request.upload，路径为 /api/resumes/upload。
+1. 第 13 行声明异步函数，参数类型为浏览器 `File`。
+2. 第 14 行对 `targetRole` 调用 `trim` 后取反；空岗位不进入网络链路。
+3. 第 15 行调用 `setError` 写入页面提示。
+4. 第 16 行返回，阻止文件上传。
+5. 第 18 行设置 `uploading=true`，从而禁用输入与上传按钮。
+6. 第 19 行清空上一次错误。
+7. 第 20 行开始 `try`，把请求异常与后续响应校验放入同一处理域。
+8. 第 21 行调用 `resumeApi.uploadAndAnalyze(file, targetRole.trim())`，并等待其 Promise；这里第二次去空白保证提交值与前端校验值一致。
+9. 第 22 行验证后端响应包含 `storage.resumeId`；缺失时主动抛错，避免把不完整数据用于页面跳转。
+10. 第 23 行将简历 ID 交给父组件回调，父组件据此切换到后续页面。
+11. 第 24 行捕获 Axios、业务或本地校验错误。
+12. 第 25 行调用项目函数 `getErrorMessage`，把 `Error.message` 写入状态。
+13. 第 26 行开始 `finally`，无论成功或失败均执行。
+14. 第 27 行复位 `uploading=false`。
+15. 第 28-29 行关闭 `finally` 与函数。
+
+#### 3.1.3 `resumeApi.uploadAndAnalyze`
+
+**文件与行号：** `frontend/src/api/resume.ts:8-13`。
 
-#### 3.1.4 request.upload 与拦截器
+1. 第 8 行声明异步 API 包装函数，并把返回值约束为 `UploadResponse`。
+2. 第 9 行创建 `FormData`；浏览器会据此构造 multipart 边界。
+3. 第 10 行以 `file` 键写入文件，必须对应 Java 的 `@RequestPart("file")`。
+4. 第 11 行以 `targetRole` 键写入岗位文本，必须对应 `@RequestPart("targetRole")`。
+5. 第 12 行委托 `request.upload`，路径与本接口完全一致。
+6. 第 13 行结束对象方法。
 
-文件：frontend/src/api/request.ts:47-72、123-179。
+#### 3.1.4 `request` 的身份、上传与响应处理
 
-request.upload 第 173-179 行调用 instance.post；第 175 行把浏览器等待超时设为 300000ms；第 176 行声明 multipart；第 178 行提取 response.data。
+**文件与行号：** `frontend/src/api/request.ts:47-73、123-155、173-178、185-187`。
 
-createClientId（47-50 行）优先使用 crypto.randomUUID，缺失时用时间和随机数拼接。currentUserId（52-58 行）读取 localStorage 的 interview-agent-user-id，不存在就生成并保存。请求拦截器第 64-73 行确保 headers 存在，写入 X-User-Id 和 X-Request-Id，并返回配置。
+1. `createClientId` 第 47 行定义 ID 工厂；第 48 行优先调用浏览器安全随机 UUID；第 49 行在旧环境用前缀、时间与两段随机十六进制拼接替代。
+2. `currentUserId` 第 52 行定义本地身份键读取函数；第 53 行从 localStorage 读取；第 54 行若非空直接复用；第 55 行否则生成 ID；第 56 行持久化；第 57 行返回。该值是暂时身份键，不是鉴权令牌。
+3. 请求拦截器第 64 行注册。第 65 行确保 `headers` 对象存在；第 66 行定义兼容 AxiosHeaders 与普通对象的 `setHeader`；第 67-68 行分别处理两种写入方式；第 70 行写 `X-User-Id`；第 71 行为本次请求写新的 `X-Request-Id`；第 72 行返回配置。
+4. 响应成功拦截器第 123-135 行处理 Java `ApiResult`。第 125 行读取包裹体；第 126 行确认有 `code`；第 127 行识别成功码；第 128 行把外层 `data` 解包成调用方可见数据；第 129 行返回响应；第 131-132 行对非 200 包装为 `ApiRequestError`；第 134 行保留非项目响应；第 135 行结束成功回调。
+5. 错误回调第 136-154 行先判断是否 Axios 错误、第 138 行处理无 HTTP 响应的传输错误、第 140 行解码 Blob JSON、第 141-142 行优先解析项目错误体，最后第 144-153 行按 HTTP 状态构造安全错误。
+6. `request.upload` 第 173 行声明泛型上传函数；第 174 行发 POST；第 175 行把上传超时设为 300 秒；第 176 行声明 multipart；第 177 行允许调用者覆盖其他配置；第 178 行取解包后的 `response.data`。
+7. `getErrorMessage` 第 185 行声明显示转换函数；第 186 行仅暴露 `Error.message`，未知对象使用固定兜底文本；第 187 行结束。
 
-响应拦截器第 125-129 行检测 code=200 后把 response.data 替换为外层 data，因此页面收到的是 storage/analysis 对象；第 131-153 行解析非 200、Blob JSON、网络超时和服务不可用异常，并拒绝 Promise。
+### 3.2 Java Web 入口与保护函数
 
-### 3.2 Java Web 函数
+#### 3.2.1 `RequestIdFilter.doFilterInternal` 与 `normalize`
 
-#### 3.2.1 RequestIdFilter.doFilterInternal 与 normalize
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/infrastructure/web/RequestIdFilter.java:23-41`。
 
-文件：java-backend/src/main/java/com/interviewguide/infrastructure/web/RequestIdFilter.java:23-41。
+1. `doFilterInternal` 第 23-24 行声明 Servlet 过滤函数及可抛出的容器异常。
+2. 第 25 行读取 `X-Request-Id` 并调用项目函数 `normalize`。
+3. 第 26 行把结果存为 request attribute，供限流、幂等和异常包装读取。
+4. 第 27 行回写响应头，客户端可用它关联日志。
+5. 第 28 行将 ID 放进 SLF4J MDC。
+6. 第 29 行开始 `try`；第 30 行把控制权交给后续过滤器和 Controller。
+7. 第 31 行开始 `finally`；第 32 行移除 MDC，避免线程池复用时串请求；第 33-34 行结束。
+8. `normalize` 第 36 行定义私有函数；第 37 行只接受非空、长度不超过 128 且匹配安全字符集的值；第 38 行原样返回合格值；第 40 行为不合格或缺失值生成 UUID；第 41 行结束。
 
-1. 第 25 行读取 X-Request-Id 并调用 normalize；normalize 第 36-41 行只接受不超过128字符且匹配 [A-Za-z0-9._:-]+ 的值，否则生成 UUID。
-2. 第 26 行把 requestId 放入 Servlet attribute；第 27 行写入响应头；第 28 行放入 MDC。
-3. 第 30 行进入下一个过滤器；第 31-33 行 finally 清理 MDC，避免线程复用污染。
+#### 3.2.2 `SimpleRateLimitFilter.doFilterInternal` 与 Redis 回退
 
-#### 3.2.2 SimpleRateLimitFilter.doFilterInternal
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/infrastructure/ratelimit/SimpleRateLimitFilter.java:48-82`，`JavaRedisStore.java:31-39`。
 
-文件：java-backend/src/main/java/com/interviewguide/infrastructure/ratelimit/SimpleRateLimitFilter.java:38-61。
+1. 限流函数第 48-49 行声明过滤器参数。
+2. 第 50 行识别 `/health` 与 `/actuator`，第 51 行放行健康探针，第 52 行结束该分支。
+3. 第 54 行用远端 IP 与 URI 拼接限流维度；第 55 行计算当前分钟窗口。
+4. 第 56 行在未注入 Redis 的测试场景生成空 Optional；第 57-58 行在生产场景调用 `incrementInFixedWindow`，键前缀是 `java:rate-limit:`，TTL 为 65 秒。
+5. `JavaRedisStore.incrementInFixedWindow` 第 31 行定义方法；第 32 行开始捕获 Redis 数据访问异常；第 33 行执行原子 `INCR`；第 34 行仅首次计数时设置过期；第 35 行返回计数；第 36-38 行记录警告并返回空值。
+6. 回到过滤器，第 60-61 行在 Redis 成功时采用分布式计数。第 62 行进入失败/未配置分支；第 65-66 行用 `ConcurrentHashMap.compute` 创建或替换分钟窗口；第 67 行原子递增本地计数。该回退保障可用性，但跨 Java 实例的严格全局限流暂时失效。
+7. 第 69 行比较计数与阈值。超限时第 70 行置 429；第 71 行告知 60 秒后重试；第 72 行设 JSON 类型；第 73-74 行取追踪 ID；第 75-77 行构造统一错误；第 78 行序列化；第 79 行终止链路。
+8. 第 81 行在未超限时放行，随后才可能进入幂等过滤器和 Controller。
 
-1. 第 40-43 行放行 health 和 actuator。
-2. 第 44 行用远端地址与 URI 构造限流键；第 45 行计算 epoch 分钟。
-3. 第 46-47 行用 ConcurrentHashMap.compute 创建或复用窗口。
-4. 第 48 行原子递增并比较 limit；超限时第 49-58 行返回 429、Retry-After 和 ApiErrorResponse，不进入 Controller；第 60 行对正常请求继续 filterChain。
+#### 3.2.3 `IdempotencyFilter.shouldNotFilter`、`doFilterInternal` 与 `writeConflict`
 
-#### 3.2.3 ResumeController.upload
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/infrastructure/idempotency/IdempotencyFilter.java:41-96`。
 
-文件：java-backend/src/main/java/com/interviewguide/resume/controller/ResumeController.java:23-37。
+1. `shouldNotFilter` 第 41 行定义跳过判定；第 42-44 行规定只有携带 `X-Idempotency-Key` 的 POST、PUT、PATCH、DELETE 才执行。当前上传前端未发送该头，因而通常跳过。
+2. 若调用方发送该头，`doFilterInternal` 第 48-49 行运行；第 50 行读取并去空白；第 51-53 行拒绝空键或超过 200 字符的键，并调用 `writeConflict`。
+3. 第 55 行读取用户 ID；第 56-57 行按用户、方法、路径和业务键构造隔离 Redis 键。
+4. 第 58 行调用 `JavaRedisStore.acquire`；其第 42-48 行通过 `setIfAbsent` 原子占位，Redis 异常返回空 Optional。
+5. 第 60-61 行使用分布式占位结果；第 62-65 行在 Redis 故障时使用本机 `fallback.putIfAbsent` 并清除过期项。
+6. 第 67-70 行拒绝重复请求；第 72-73 行让已接受请求继续执行。第 77-80 行对 4xx 删除占位，允许修正参数后使用同一个键重试；第 81-84 行对异常也删除占位并重新抛出。
+7. `writeConflict` 第 88-95 行设置 409、读取 requestId、构造 `ApiErrorDetail` 并写入 JSON。
 
-~~~java
-@PostMapping("/upload")
-public ApiResult<Map<String, Object>> upload(@RequestPart("file") MultipartFile file,
-        @RequestPart("targetRole") String targetRole,
-        @RequestHeader(value = "X-User-Id", required = false) String userId) throws IOException {
-    return ApiResult.success(resumeService.upload(file, targetRole, userId));
-}
-~~~
+#### 3.2.4 `ResumeController.upload` 与 `ApiResult.success`
 
-1. 第 23-24 行的 Controller 和类级映射与第 32 行方法映射拼出完整路径。
-2. 第 33 行由 Spring 把 multipart file 绑定为 MultipartFile。
-3. 第 34 行把 targetRole part 绑定为 String。
-4. 第 35 行读取可选 X-User-Id；缺失时由业务层 require 拒绝；IOException 可向异常处理器传播。
-5. 第 36 行先执行 resumeService.upload，再把结果交给 ApiResult.success。
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/resume/controller/ResumeController.java:32-37`，`java-backend/src/main/java/com/interviewguide/common/web/dto/ApiResult.java:3-6`。
 
-#### 3.2.4 ApiResult.success
+1. Controller 第 32 行把方法映射为 `/upload`，与类级 `/api/resumes` 拼成完整路径。
+2. 第 33 行把 multipart 的 `file` 绑定为 `MultipartFile`。
+3. 第 34 行把 `targetRole` 绑定为字符串。
+4. 第 35 行读取可缺省的身份头；真正的非空约束在业务层，以保持适配器简单。
+5. 第 36 行调用 `resumeService.upload`，再以 `ApiResult.success` 包装其结果；第 37 行结束。
+6. `ApiResult.success` 的第 4 行接收泛型数据，第 5 行构造 `code=200`、`message=success` 的统一响应，第 6 行结束。前端响应拦截器会去掉这层包装。
 
-文件：java-backend/src/main/java/com/interviewguide/common/web/dto/ApiResult.java:3-6。第 4 行接收泛型数据；第 5 行构造 code=200、message=success 的 record。Jackson 序列化后，前端响应拦截器取 data。
+### 3.3 Java 简历写入与任务创建函数
 
-### 3.3 ResumeService.upload
+#### 3.3.1 `ResumeService.upload`
 
-文件：java-backend/src/main/java/com/interviewguide/resume/service/ResumeService.java:74-138。
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeService.java:74-138`。
 
-1. 第 74-77 行声明上传业务函数，输入文件、岗位、用户 ID，允许 IOException。
-2. 第 78 行调用 identity.require；null 或 blank 抛 USER_ID_REQUIRED，合法值 strip 后成为 owner。
-3. 第 79 行 file.isEmpty 为空文件抛 RESUME_FILE_REQUIRED。
-4. 第 80-82 行检查原始文件名，缺失抛 RESUME_FILENAME_REQUIRED。
-5. 第 83-85 行检查 targetRole，空白抛 TARGET_ROLE_REQUIRED。
-6. 第 86 行调用 fileStorage.inspect 读取字节并生成 FileDescriptor。
-7. 第 87-89 行按 owner 查询候选人；不存在时调用 idGenerator.next 创建 ID，再 candidateRepository.save。
-8. 第 90-92 行按 candidateId 与 hash 查找重复文件。
-9. 第 93-105 行重复分支：取候选人简历 ID、把 duplicate 设为当前版本、保存候选人、取消活动分析、重新 submit，并返回 duplicate=true、resumeId、storage.resumeId 与分析状态；不重新写文件。
-10. 第 107-110 行新文件分支读取旧简历 ID并计算最大版本+1；无历史记录时版本为1。
-11. 第 111 行调用 idGenerator.next 生成新 resumeId。
-12. 第 113-117 行用 Tika.parseToString(file.getInputStream()) 解析文件；异常转为 RESUME_PARSE_FAILED。
-13. 第 118-120 行拒绝空文本，抛 RESUME_CONTENT_EMPTY。
-14. 第 121 行调用 fileStorage.store，把文件写入受控根目录。
-15. 第 123-125 行构造 ResumeEntity、调用 attachFile 写入文件元数据、保存实体。
-16. 第 126-129 行数据库保存失败时调用 fileStorage.delete 清理已写入文件，再重新抛异常。
-17. 第 130-132 行取消旧分析、设置 candidate.currentResumeId 并保存候选人。
-18. 第 133 行调用 analysisService.submit，创建 PENDING 分析并入队；返回不代表 Python 已完成。
-19. 第 134-137 行组装 storage.resumeId、原文、分析状态和 analysisId 并返回。
+1. 第 74-77 行声明上传业务函数及三个输入参数。
+2. 第 78 行调用 `identity.require` 得到规范化 owner。
+3. 第 79 行拒绝空文件；第 80-82 行拒绝空文件名；第 83-85 行拒绝空岗位。
+4. 第 86 行调用 `fileStorage.inspect`，一次读取字节并得到安全文件名、大小、MIME 与 SHA-256。
+5. 第 87-89 行按用户查询候选人；没有候选人时调用 `idGenerator.next` 新建 ID，构造 `CandidateEntity` 后调用 Mapper 默认 `save`。
+6. 第 90-92 行以候选人 ID 和文件哈希查询重复文件。
+7. 第 93 行进入重复分支。第 94-95 行取该候选人的全部简历 ID；第 96 行把重复简历设为当前简历；第 97 行保存候选人；第 98 行取消这些简历正在运行的分析；第 99 行为重复简历重新提交分析。
+8. 第 100-105 行返回 `duplicate=true`、已有 resumeId、`storage.resumeId` 与新分析任务信息，不重新写磁盘文件。
+9. 新文件分支第 107-108 行取得旧简历 ID；第 109-110 行查询最大版本并计算下一版本；第 111 行生成新的业务 ID。
+10. 第 112 行声明文本变量；第 113-117 行调用第三方 Tika 解析输入流，任何解析异常都转换为 `RESUME_PARSE_FAILED`；第 118-120 行拒绝空解析结果。
+11. 第 121 行在受控存储根目录写入原文件。第 123 行构造 `ResumeEntity`；第 124 行调用 `attachFile` 写入文件元数据；第 125 行通过 Mapper 保存。
+12. 第 126-129 行在数据库保存失败时删除刚写入的文件，并重新抛出原异常，避免孤儿文件。
+13. 第 130 行取消旧简历分析；第 131 行更新候选人的当前简历指针；第 132 行保存候选人；第 133 行创建并投递新分析任务。
+14. 第 134 行创建可变结果 Map；第 135 行写 `storage.resumeId`；第 136 行写原文、状态与分析 ID；第 137 行返回；第 138 行结束。
 
-#### 3.3.1 UserIdentityResolver.require
+#### 3.3.2 身份、ID、文件和实体函数
 
-文件：java-backend/src/main/java/com/interviewguide/common/security/UserIdentityResolver.java:14-19。第 15-17 行拒绝 null/blank 并抛 BusinessException；第 18 行 strip；第 19 行返回规范化 ID。
+**`UserIdentityResolver.require`：** `java-backend/src/main/java/com/interviewguide/common/security/UserIdentityResolver.java:14-19`。第 14 行定义函数；第 15-17 行拒绝 null 或空白 `X-User-Id`；第 18 行 `strip`；第 19 行返回。
 
-#### 3.3.2 ResumeFileStorageService.inspect、sha256、store
+**`BusinessIdGenerator.next`：** `java-backend/src/main/java/com/interviewguide/common/id/BusinessIdGenerator.java:13-16`。第 13 行定义函数；第 14 行以原子 `updateAndGet` 取“当前毫秒”和“上一次值加一”的较大者，防止同 JVM 同毫秒重复；第 15 行转成字符串；第 16 行结束。
 
-文件：java-backend/src/main/java/com/interviewguide/resume/service/ResumeFileStorageService.java:21-41、62-69。
+**`ResumeFileStorageService.inspect`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeFileStorageService.java:21-31`。第 22 行读取字节；第 23 行调用 `sha256`；第 24 行读取原名；第 25-27 行拒绝无名文件；第 28 行用 `Path.getFileName` 去掉客户端目录；第 29-30 行构造不可变 `FileDescriptor`；第 31 行结束。
 
-inspect 第 22 行读取全部 bytes；第 23 行调用 sha256；第 24 行读取文件名；第 25-27 行拒绝空名；第 28 行 Path.getFileName 去除目录；第 29-30 行构造 FileDescriptor。sha256 第 64 行调用 SHA-256；第 65-67 行逐字节格式化为小写十六进制；第 68 行算法不可用时转 IllegalStateException。store 第 34 行校验 resumeId；第 35-37 行拼接并校验目标路径必须 startsWith(root)；第 38 行创建父目录；第 39 行 CREATE_NEW 写文件；第 40 行返回 StoredFile。
+**`ResumeFileStorageService.sha256`：** 同文件第 62-69 行。第 63 行开始异常保护；第 64 行取得 SHA-256 摘要；第 65 行创建字符串累加器；第 66 行逐字节格式化为两位小写十六进制；第 67 行返回；第 68 行把算法不可用转换为不可恢复运行时异常。
 
-#### 3.3.3 实体和 Repository 函数
+**`ResumeFileStorageService.store`：** 同文件第 33-41 行。第 34 行校验 resumeId；第 35 行形成 `resumeId/filename` 键；第 36 行解析并规范化目标路径；第 37 行检查仍在根目录内以阻止路径穿越；第 38 行建父目录；第 39 行以 `CREATE_NEW` 写文件；第 40 行返回 `StoredFile`；第 41 行结束。
 
-文件：`java-backend/src/main/java/com/interviewguide/resume/domain/ResumeEntity.java:26-54`；`java-backend/src/main/java/com/interviewguide/resume/domain/CandidateEntity.java:19-29`；`java-backend/src/main/java/com/interviewguide/resume/mapper/CandidateRepository.java:7-9`；`java-backend/src/main/java/com/interviewguide/resume/mapper/ResumeRepository.java:8-12`。
+**`CandidateEntity.setCurrentResumeId`：** `java-backend/src/main/java/com/interviewguide/resume/domain/CandidateEntity.java:22`。该单行只替换内存中的当前简历指针；实际持久化由其后的 `CandidateRepository.save` 完成。
 
-ResumeEntity（java-backend/src/main/java/com/interviewguide/resume/domain/ResumeEntity.java:26-54）：JPA 无参构造供反射使用；业务构造函数第 29-35 行保存 id、candidateId、version、content 和 createdAt；attachFile 第 48-54 行保存 hash、文件名、大小、MIME 和 storageKey。CandidateEntity（CandidateEntity.java:19-23、29）构造函数保存 id/userId/displayName，setCurrentResumeId 只更新当前简历指针。
+**`ResumeEntity.<init>` 与 `attachFile`：** `java-backend/src/main/java/com/interviewguide/resume/domain/ResumeEntity.java:20-26、39-45`。构造函数第 21-25 行依次写 ID、候选人 ID、版本、文本和创建时间；`attachFile` 第 40-44 行依次写哈希、文件名、大小、类型、存储键，第 45 行结束。
 
-CandidateRepository.findByUserId（CandidateRepository.java:7-9）由 Spring Data 按 user_id 查询；继承的 findById 和 save 负责主键查询及新增/更新。ResumeRepository（ResumeRepository.java:8-12）的 findFirstByCandidateIdAndFileHash 查重，findByCandidateId 取历史简历，findFirstByCandidateIdOrderByVersionDesc 取最新版本，save 持久化实体。这些是项目声明的 Repository 函数，实际 SQL 由 JPA 根据方法名生成。
+#### 3.3.3 MyBatis Mapper 函数和 SQL
 
-### 3.4 ResumeAnalysisService 与任务持久化
+1. `CandidateRepository.save` 位于 `CandidateRepository.java:9-12`。第 9 行声明 XML 对应的 `upsert`；第 10 行默认方法先执行 `upsert(entity)` 再原样返回实体；第 11-12 行声明按主键、按用户查询。
+2. `CandidateRepository.xml:4` 是 `findById` SQL；第 5 行是 `findByUserId` SQL，`LIMIT 1` 保证单值；第 6 行是 `INSERT ... ON CONFLICT(id) DO UPDATE`，因此候选人保存不依赖 JPA dirty checking。
+3. `ResumeRepository.java:11-18` 中，第 11 行声明 upsert；第 12 行默认 save；第 13 行按 ID；第 16 行用 `@Param` 绑定重复查找参数；第 17-18 行分别列出历史与最新版本查询。
+4. `ResumeRepository.xml:6` 用 candidate_id、file_hash 和版本倒序找重复；第 7 行按版本列历史；第 8 行取最新版本；第 9 行以 PostgreSQL `ON CONFLICT(id) DO UPDATE` 保存简历。所有这些 SQL 都由 MyBatis 执行。
 
-#### 3.4.1 ResumeAnalysisService.submit
+#### 3.3.4 `ResumeAnalysisService.submit`、持久化与 Redis 一致性
 
-文件：java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisService.java:38-60。
+**`ResumeAnalysisService.submit`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisService.java:43-64`。第 44-46 行校验岗位；第 47 行调用 `requiredResume`；第 48-49 行取得候选人；第 50-52 行校验简历归属；第 56 行取消同简历活动任务；第 57 行创建 PENDING 任务；第 58 行开始投递保护；第 59 行投递 RabbitMQ；第 60 行转为视图；第 61-64 行在投递失败时写 FAILED 并重新抛出。
 
-1. 第 39-41 行校验 targetRole。
-2. 第 42 行调用 requiredResume（77-80 行），通过 resumeRepository.findById 查不到时抛 RESUME_NOT_FOUND。
-3. 第 43-47 行查 CandidateRepository.findById，找不到抛 CANDIDATE_NOT_FOUND，userId 不匹配抛 RESUME_ACCESS_DENIED。
-4. 第 51 行调用 persistence.cancelActiveForResumeIds，取消同简历的 PENDING/PROCESSING。
-5. 第 52 行调用 persistence.create，岗位使用 strip。
-6. 第 54 行调用 worker.enqueue。
-7. 第 55 行调用 toView（82-88 行）把实体字段转成 ResumeAnalysisView；stringList（90-94 行）和 mapList（96-100 行）解析 JSON，异常返回空集合。
-8. 第 56-59 行入队失败时调用 safeMessage（102-105 行，最多500字符）写失败状态后重新抛异常。
+**`requiredResume`：** 同文件第 86-89 行。第 87 行按 ID 查询；第 88 行将缺失转为 `RESUME_NOT_FOUND`；第 89 行结束。
 
-#### 3.4.2 ResumeAnalysisPersistenceService
+**`ResumeAnalysisPersistenceService.create`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisPersistenceService.java:33-38`。第 34 行开始事务函数；第 35 行构造 `ResumeAnalysisEntity` 并调用 Mapper `save`；第 36 行登记提交后缓存动作；第 37 行返回实体。
 
-文件：java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisPersistenceService.java:28-89。
+**`cacheAfterCommit`：** 同文件第 115-125 行。第 116-119 行处理无事务的保护分支；当前 `create` 在事务内，所以第 120 行注册同步器，第 121-123 行只在数据库提交后调用 `taskCache.updateResumeAnalysis`。这保证 Redis 写失败或事务回滚都不会制造虚假的已提交状态。
 
-create 第 29-30 行构造 ResumeAnalysisEntity 并 repository.save；cancelActiveForResumeIds 第 63 行空集合直接返回，第 64-65 行查询 PENDING/PROCESSING 并逐个调用实体 cancel；beginAttempt 第 69-74 行 required 查询实体，canBeginAttempt 为 false 返回 null，否则 beginAttempt 并返回；required 第 86-89 行按 id 查询，不存在抛 RESUME_ANALYSIS_NOT_FOUND。
+**`JavaTaskStatusCache.updateResumeAnalysis`：** `java-backend/src/main/java/com/interviewguide/infrastructure/redis/JavaTaskStatusCache.java:20-39`。第 21 行创建有序快照；第 22-36 行逐项复制分析 ID、状态、分数、摘要、JSON 字段、错误和更新时间；第 37 行写任务 ID 键；第 38 行写“该简历最新任务”键；第 39 行结束。底层 `JavaRedisStore.putJson` 在 `JavaRedisStore.java:51-58` 捕获 Redis/JSON 异常，只记日志，不影响已提交数据库数据。
 
-ResumeAnalysisEntity（java-backend/src/main/java/com/interviewguide/resume/domain/ResumeAnalysisEntity.java:45-109）：构造函数把状态设为 PENDING；beginAttempt 把状态设为 PROCESSING、retryCount 加一并更新时间；canBeginAttempt 只允许 PENDING/PROCESSING；cancel 只将这两种状态改为 CANCELLED；isCancelled 判断 CANCELLED。Python 返回后实际调用的 complete、fail、recordRetryableFailure 与 truncate 也在本文后续各自列出源码行号并逐句解释，当前段落不以概括替代这些独立函数解析。
+**`ResumeAnalysisWorker.enqueue`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisWorker.java:49-53`。第 50-52 行把任务类型、分析 ID 字符串和用户 ID 构造成 `AgentWorkTaskMessage` 并发往配置的 exchange/routing key；第 53 行结束。
 
-#### 3.4.3 ResumeAnalysisWorker.enqueue
+#### 3.3.5 审核补充：任务取消、视图转换、持久化与 Mapper 函数
 
-文件：java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisWorker.java:48-52。第 49 行选择 exchange；第 50 行选择 routing key；第 51 行构造 AgentWorkTaskMessage 并调用 RabbitTemplate.convertAndSend。AgentWorkTaskMessage record（AgentWorkTaskMessage.java:5-7）提供 taskType/resourceId/userId 访问器及 RESUME_ANALYSIS 常量。消息只携带 ID，不携带原文。
+以下函数均已经出现在第 2 节的真实调用链中。它们不能因为实现短小而省略；本小节将原先合并的说明拆开，作为首篇文档的逐函数审核补全。
 
-### 3.5 RabbitMQ 消费和 Java Worker
+**`ResumeAnalysisService.cancelActiveForResumeIds`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisService.java:82-84`。第 82 行声明接收简历 ID 列表的公开服务方法。第 83 行不在本层自行修改任务，而是把列表完整委托给持久化服务的同名方法，因此取消与状态缓存更新都仍在事务边界内执行。第 84 行结束方法。它由 `ResumeService.upload` 的重复上传和新版本上传分支调用，目的是避免旧任务覆盖当前简历的分析结果。
 
-#### 3.5.1 RabbitAgentWorkConsumer.consume
+**`ResumeAnalysisPersistenceService.cancelActiveForResumeIds`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisPersistenceService.java:80-85`。第 80 行以 `@Transactional` 标记整个批量取消操作。第 81 行声明输入集合，不把调用方限定为 `List`。第 82 行对空集合立即返回，避免生成无效 SQL。第 83 行通过 MyBatis `ResumeAnalysisRepository.findByResumeIdInAndStatusIn` 仅查询 `PENDING`、`PROCESSING` 两种活动状态。第 84 行逐个执行 Lambda：先调用实体 `cancel` 改变内存状态，再调用 Mapper `save` 落库，最后调用 `cacheAfterCommit` 登记事务提交后刷新 Redis。第 85 行结束方法。
 
-文件：java-backend/src/main/java/com/interviewguide/infrastructure/messaging/RabbitAgentWorkConsumer.java:22-39。第 24-27 行校验消息及三个字段；第 29-35 行按 taskType 分派，简历任务把 resourceId 转 Long 后调用 resumeAnalysisWorker.process；第 36-38 行捕获非数字 resourceId 并丢弃。
+**`ResumeAnalysisRepository.findByResumeIdInAndStatusIn`：** `java-backend/src/main/java/com/interviewguide/resume/mapper/ResumeAnalysisRepository.java:23`，对应 `java-backend/src/main/resources/mapper/resume/ResumeAnalysisRepository.xml` 中同名 `<select>`。接口第 23 行用两个 `@Param` 将简历集合和状态集合命名为 XML 可引用的参数。XML 的 `foreach` 将两组集合展开为 `IN (...)` 条件；它只读取候选记录，不改变状态。调用方收到实体列表后才逐一调用 `save`，所以取消行为的写入点仍清晰可追踪。
 
-#### 3.5.2 ResumeAnalysisWorker.process
+**`ResumeAnalysisEntity.cancel`：** `java-backend/src/main/java/com/interviewguide/resume/domain/ResumeAnalysisEntity.java` 的 `cancel` 方法。该方法把可取消任务标记为 `CANCELLED` 并更新时间字段；它不直接访问数据库。其后的 `ResumeAnalysisRepository.save` 才把该状态写入 PostgreSQL，避免将领域对象方法误认为持久化操作。
 
-文件：java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisWorker.java:54-125。
+**`ResumeAnalysisRepository.save`：** `java-backend/src/main/java/com/interviewguide/resume/mapper/ResumeAnalysisRepository.java:15-18`。第 15 行声明 MyBatis Mapper 的默认保存函数。第 16 行根据 `entity.getId()` 是否为空选择 `insert` 或 `update`：新建任务没有数据库主键，已有任务走更新。第 17 行原样返回同一个实体，便于 `create` 取得数据库回填的主键。第 18 行结束方法。第 13、14 行分别声明由 XML 实现的 `insert` 与 `update`；这不是 JPA 自动脏检查。
 
-1. 第 55 行查询分析；第 58-59 行不存在或已取消直接返回。
-2. 第 61-64 行查询简历，不存在返回。
-3. 第 65-68 行调用 isCurrentResume（131-134 行），内部通过 CandidateRepository.findById 比较 candidate.currentResumeId；不是当前版本则 cancel 并返回。
-4. 第 69-71 行调用 persistence.beginAttempt；不能开始时返回。
-5. 第 74-81 行生成 activationRunId、activationSessionId，并构造 AgentResumeMemoryActivationRequest；UUID.randomUUID 生成 requestId。
-6. 第 76 行调用 pythonAgentClient.activateResumeMemory；第 82-84 行调用 requireMatchingResponse。
-7. 第 85-88 行再次检查 current resume，防止 Python 激活期间版本替换。
-8. 第 89-96 行构造 evaluationRunId/evaluationSessionId 和 AgentResumeEvaluateRequest，再调用 evaluateResume。
-9. 第 97-103 行检查 code；可重试错误第 100 行抛 PythonAgentException，不可重试第 102 行 persistence.fail。
-10. 第 105-112 行校验响应身份；未取消且仍为当前版本时 persistence.complete，否则 cancel。
-11. 第 113-124 行捕获 RuntimeException；可重试且未超 maxDeliveryAttempts 时 recordRetryableFailure 后重新抛出，其他错误写 FAILED。
+**`ResumeAnalysisService.toView`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisService.java:91-97`。第 91 行声明将数据库领域实体转换为 HTTP 视图的方法。第 92-94 行按构造器参数顺序拷贝分析 ID、状态、六项分数、摘要和更新时间。第 95 行对 `strengthsJson`、`suggestionsJson` 调用 `stringList`，将 JSON 字符串恢复为字符串列表。第 96 行对问题 JSON 调用 `mapList`，并复制错误信息。第 97 行结束；转换不产生数据库写入。
 
-requireSuccess（136-142 行）拒绝 null 或非 1xx/2xx，并按 response.retryable 构造异常。requireMatchingResponse（144-154 行）先调用 requireSuccess，再比较 userId/sessionId/runId。safeMessage（156-160 行）截断异常信息到500字符。AgentResponse.retryable（pythonagent/dto/AgentResponse.java:24-26）只有 error 非空、error.retryable 且 code 为5xx时返回 true。
+**`ResumeAnalysisService.stringList`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisService.java:127-131`。第 127 行声明 JSON 字符串到列表的私有转换。第 128 行把空值或空白字符串规范为不可变空列表。第 129 行通过项目注入的 `ObjectMapper` 和 `TypeReference` 反序列化。第 130 行吞掉格式错误并返回空列表，防止历史脏数据导致查询接口整体失败。第 131 行结束。
 
-### 3.6 Java HTTP 适配器
+**`ResumeAnalysisService.mapList`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisService.java:133-137`。第 133 行声明问题列表转换函数。第 134 行对空 JSON 返回空列表。第 135 行按目标泛型 `List<Map<String,Object>>` 读取 JSON。第 136 行在反序列化异常时回退为空列表。第 137 行结束。它由 `toView` 调用，用于把持久化的 `issues_json` 安全呈现给前端。
 
-文件：java-backend/src/main/java/com/interviewguide/pythonagent/mapper/HttpPythonAgentClient.java:43-96；java-backend/src/main/java/com/interviewguide/infrastructure/reliability/AgentCallExecutor.java:22-43。
+**`ResumeAnalysisPersistenceService.beginAttempt`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisPersistenceService.java:87-95`。第 87 行声明事务。第 88 行声明按分析 ID 开始一次消费尝试。第 89 行调用 `required` 读取任务，不存在时立即报业务错误。第 90 行调用实体 `canBeginAttempt`；若任务已完成、取消或不允许再次处理则返回 `null`。第 91 行调用实体 `beginAttempt`，将状态切换到处理中并增加尝试计数。第 92 行调用 Mapper `save` 更新数据库。第 93 行登记事务提交后的 Redis 快照刷新。第 94 行把开始后的实体返回给 Worker，以便比较重试次数。第 95 行结束。
 
-activateResumeMemory 第 47 行把 post('/v1/agent/resume/activate', request) 交给 callExecutor；evaluateResume 第 46 行同理，路径为 /v1/agent/evaluate/resume。AgentCallExecutor.execute 第 24 行循环 attempts，第 26 行执行 Supplier，第 27-31 行仅对 retryable 异常且尚有次数时 sleepBeforeRetry；第 33 行耗尽后抛最后异常。sleepBeforeRetry 第 38 行 sleep，InterruptedException 时恢复中断标志并抛异常。
+**`ResumeAnalysisPersistenceService.required`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisPersistenceService.java:110-113`。第 110 行声明私有查询助手。第 111 行调用 `ResumeAnalysisRepository.findById`。第 112 行在 `Optional` 为空时抛出 `RESUME_ANALYSIS_NOT_FOUND`，否则返回实体。第 113 行结束。Worker、`beginAttempt`、完成和失败分支都通过它避免在空任务上继续写状态。
 
-HttpPythonAgentClient.post 第 66 行调用 validateRequest；第 68 行 RestClient POST 并反序列化 AgentResponse；第 69-70 行拒绝空响应；第 71-79 行区分 PythonAgentException、HTTP 响应异常和普通网络异常。parseStructuredError（82-87 行）尝试把错误响应体解析成结构化 AgentResponse。validateRequest（89-96 行）调用 Validator.validate，收集约束字段并在有错误时抛不可重试异常。
+**`ResumeAnalysisPersistenceService.isCancelled`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisPersistenceService.java:108`。这一行是单行公开函数：先调用 `required(id)` 取得最新持久化实体，再调用实体 `isCancelled()` 返回布尔值。它由 Worker 在成功回写和异常处理前调用，确保已被新上传操作取消的任务不会被重新标记为失败或完成。
 
-### 3.7 Python 激活端点
+**`ResumeAnalysisPersistenceService.complete`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisPersistenceService.java:40-55`。第 40 行声明事务。第 41 行接收分析 ID 和 Python 的 `AgentResponse`。第 42 行读取输出映射。第 43-45 行拒绝缺失输出。第 46 行用 `required` 取得任务。第 47-52 行调用实体 `complete`，其中六次 `integer` 强制校验分数字段，`string` 校验摘要，三次 `json` 序列化列表或问题对象。第 53 行调用 Mapper 保存完成状态与结果。第 54 行登记提交后 Redis 刷新。第 55 行结束。
 
-#### 3.7.1 activate_resume_memory
+**`ResumeAnalysisPersistenceService.integer`、`string`、`json`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisPersistenceService.java:127-142`。`integer` 的第 128 行按键取值，第 129 行仅接受数值并取 `intValue`，第 130 行对缺失或非数值抛出 `RESUME_ANALYSIS_OUTPUT_INVALID`；第 131 行结束。`string` 的第 133 行声明函数，第 134 行取值，第 135 行只接受非空白字符串，第 136 行对不合格输出抛出同类业务异常，第 137 行结束。`json` 的第 139 行声明序列化函数，第 140 行把 `null` 规范为空列表并写成 JSON，第 141 行把 Jackson 序列化错误转换为业务异常，第 142 行结束。这三者保证 Python 返回的结构不符合协议时不会写入半成品分析结果。
 
-文件：python-agent/app/api/application.py:205-221。
+**`ResumeAnalysisPersistenceService.recordRetryableFailure`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisPersistenceService.java:97-103`。第 97 行开启事务。第 98 行声明 ID 和已截断错误文本。第 99 行读取任务。第 100 行调用实体 `recordRetryableFailure`，保留失败原因并使任务处于可重试状态。第 101 行更新 Mapper。第 102 行登记 Redis 刷新。第 103 行结束；Worker 随后重新抛出异常，把是否重新投递交由 RabbitMQ 配置处理。
 
-1. FastAPI 先按 AgentResumeMemoryActivationRequest 校验 alias、必填字段和 operation。
-2. 第 209 行调用 _remember_request_context（388-392 行），通过 payload.model_dump(by_alias=True, mode='json') 保存异常上下文。
-3. 第 210 行调用 _resolve_memory_service（348-354 行）；state 为空时调用 build_memory_service 并缓存。
-4. 第 210-214 行调用 MemoryService.activate_resume，传入 userId、subjectId、candidateId、inputText、targetRole 和 runId。
-5. 第 215-221 行构造 code=100、COMPLETED、ACTIVE 的 AgentResponse。
+**`ResumeAnalysisWorker.isRetryable`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisWorker.java:128-130`。第 128 行声明判断函数。第 129 行仅当异常是 `PythonAgentException` 且其 `retryable` 标志为真时返回真；普通业务异常、响应身份不匹配和参数错误不会重试。第 130 行结束。
 
-build_memory_service（python-agent/app/bootstrap.py:32-37）第 33 行读取 settings，第 34 行 create_session_factory，第 35-36 行构造 PostgresLongTermMemoryRepository 和 MemoryPolicy。create_session_factory（python-agent/app/infrastructure/persistence/database.py:16-19）调用 create_engine；create_engine（9-13 行）检查 DATABASE_URL 后创建 AsyncEngine。MemoryPolicy.load（python-agent/app/memory/policy.py:18-40）读取 JSON、转换配置并校验窗口和保留数量。
+**`ResumeAnalysisWorker.isCurrentResume`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisWorker.java:132-135`。第 132 行声明函数。第 133 行通过 `CandidateRepository.findById` 查询简历所属候选人，缺失时得到 `null`。第 134 行同时要求候选人存在，且候选人的 `currentResumeId` 精确等于当前 `resume.id`。第 135 行结束。这是消息延迟到达时防止旧简历结果回写的关键校验。
 
-#### 3.7.2 MemoryService.activate_resume
+**`ResumeAnalysisWorker.requireSuccess`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisWorker.java:137-143`。第 137 行声明响应状态验证函数。第 138 行将空响应、非 100–199 的响应视为失败。第 139-140 行优先读取 Python 返回的错误消息，缺失时使用调用点的后备文本。第 141 行抛出 `PythonAgentException`，并保留远端响应的可重试标志。第 142-143 行结束。
 
-文件：python-agent/app/memory/service.py:49-97。
+**`ResumeAnalysisWorker.requireMatchingResponse`：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisWorker.java:145-155`。第 145-147 行声明同时校验协议状态和身份回显的函数。第 148 行先调用 `requireSuccess`。第 149-151 行逐项比较 `userId`、`sessionId`、`runId`。第 152-153 行在任一项不一致时抛出不可重试的 `PythonAgentException`，避免把其他请求的结果写到当前任务。第 154-155 行结束。
 
-1. 第 59-62 行调用 _resume_activation_fingerprint（258-267 行），对 resumeId、candidateId、resumeText、targetRole 做稳定 JSON 编码并计算 SHA-256。
-2. 第 63-66 行构造 ResumeMemory 快照。
-3. 第 67 行 repository.get 读取用户长期记忆。
-4. 第 68-76 行无记忆时创建 LongTermMemory；有 runId 时写 ResumeActivationRun；调用 repository.create。
-5. 第 77-81 行重复 runId 时比较 resumeId 和 fingerprint，不同抛 ConsistencyError，相同直接返回。
-6. 第 82-89 行已有记忆时切换 active_resume_id，调用 _merge_resume_snapshot（250-252 行）用新快照替换同 resumeId 的旧快照，并清空旧评价衍生的技术栈/深度/偏好。
-7. 第 90-96 行写入 activation run、按策略裁剪旧 run、更新时间。
-8. 第 97 行 repository.save 以 expected_version 做乐观锁更新。
+**`AgentCallExecutor.execute` 与 `sleepBeforeRetry`：** `java-backend/src/main/java/com/interviewguide/infrastructure/reliability/AgentCallExecutor.java:22-44`。`execute` 第 22 行接收惰性 HTTP 调用。第 23 行预留最后一次 Python 异常。第 24 行按配置次数循环。第 25-26 行执行一次调用并在成功时立刻返回。第 27-30 行只捕获 `PythonAgentException`；记录异常，遇到不可重试错误或最后一次尝试立即抛出，否则调用 `sleepBeforeRetry`。第 31 行结束循环体。第 33 行是理论兜底，抛出最后异常或新的不可重试异常。第 34 行结束。`sleepBeforeRetry` 第 36 行声明等待函数；第 37-38 行按配置退避；第 39 行捕获线程中断；第 40 行恢复中断标志；第 41 行转换为不可重试 Python 调用异常；第 42-44 行结束。
 
-PostgresLongTermMemoryRepository（python-agent/app/infrastructure/persistence/long_term_memory_repository.py:31-86）中，get 第 31-38 行开异步会话并按 user_id 查询、model_validate JSON；create 第 40-47 行 add entity、commit，IntegrityError 转 ConsistencyError；save 第 49-76 行把版本加一，构造带旧版本条件的 UPDATE，检查 rowcount 后提交；_to_entity 第 79-86 行完成 Pydantic 到 ORM 转换。
+### 3.4 RabbitMQ 消费、Java 到 Python 的调用及结果回写
 
-### 3.8 Python 评价端点
+#### 3.4.1 `RabbitAgentWorkConsumer.consume`
 
-#### 3.8.1 evaluate_resume
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/infrastructure/messaging/RabbitAgentWorkConsumer.java:22-39`。
 
-文件：python-agent/app/api/application.py:156-203。
+1. 第 22 行把函数订阅到 agent 工作队列；第 23 行接收反序列化消息。
+2. 第 24-27 行拒绝空消息或缺少任务类型、资源 ID、用户 ID 的消息。
+3. 第 28 行开始保护区；第 29 行按任务类型分支；第 30-31 行将简历任务 ID 转 Long 后调用 `ResumeAnalysisWorker.process`；第 32-33 行保留知识库索引分支；第 34 行记录未知类型。
+4. 第 36-38 行专门吞掉资源 ID 格式错误，避免无效消息无限重试；第 39 行结束。
 
-1. 第 158 行保存请求上下文。
-2. 第 159 行调用 _resume_evaluation_fingerprint（435-441 行），按 subjectId、inputText、targetRole 固定编码并 SHA-256。
-3. 第 160-164 行解析 MemoryService 并调用 get_resume_evaluation_run；命中相同 runId/指纹时直接复用。
-4. 第 165-170 行无缓存时调用 _resolve_resume_evaluator(request).evaluate。
-5. 第 172-188 行调用 record_resume_analysis，把评分、摘要、issues、suggestions、技术栈、深度和偏好写入长期记忆。
-6. 第 189-196 行捕获 ConsistencyError 并尝试 replay。
-7. 第 197-203 行构造 code=100 的 AgentResponse，output 使用 result.model_dump(by_alias=True)，输出字段为 camelCase。
+#### 3.4.2 `ResumeAnalysisWorker.process` 及辅助函数
 
-#### 3.8.2 ResumeEvaluationAgent.evaluate
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisWorker.java:55-161`。
 
-文件：python-agent/app/agents/evaluation/agent.py:25-50。
+1. 第 56 行读取分析记录；第 59-61 行跳过已删除或已取消任务；第 62-65 行跳过已经删除的简历。
+2. 第 66-69 行调用 `isCurrentResume`，旧版本任务改为 CANCELLED 后返回；第 70-73 行调用 `beginAttempt`，不可开始时结束消费。
+3. 第 74 行开始主处理区；第 75-76 行生成激活阶段的稳定 run/session ID；第 77-82 行构造 `AgentResumeMemoryActivationRequest` 并调用 Python 客户端。
+4. 第 83-85 行校验激活响应成功且 userId/sessionId/runId 精确回显；第 86-89 行再次确认简历仍是当前版本，防止调用期间有新上传覆盖它。
+5. 第 90-97 行生成评估 run/session ID、构造评估请求并调用 Python。
+6. 第 98-105 行处理非 1xx 成功码：可重试响应转换为异常；不可重试响应写 FAILED 并正常返回。
+7. 第 106-108 行校验成功响应身份；第 109-113 行在未取消且仍为当前简历时写 COMPLETED，否则取消。
+8. 第 114-125 行处理运行时异常：第 115-117 行忽略已取消任务；第 118-120 行对未超过消费尝试次数的可重试 Python 异常记录失败原因后重新抛出，以便 Rabbit 策略重试；第 122-124 行把其余异常写 FAILED。
+9. `isRetryable` 第 128-130 行仅认可 `PythonAgentException.retryable()`；`isCurrentResume` 第 132-135 行读取候选人并比较 currentResumeId。
+10. `requireSuccess` 第 137-143 行拒绝 null 或非成功码并保留 retryable 属性；`requireMatchingResponse` 第 145-155 行先调用它，再逐项比较 user、session、run，不一致时抛不可重试协议错误；`safeMessage` 第 157-161 行截断异常文本到 500 字符。
 
-1. 第 32 行 strip 简历文本；第 33-34 行空文本抛 ValueError。
-2. 第 36 行 SkillRegistry.get('resume-analyst')。
-3. 第 37-39 行 PromptLoader.render('resume/analysis.md', {'skill_instructions': skill.instructions})。
-4. 第 40-44 行组装 subjectId、targetRole、resumeText。
-5. 第 45-50 行调用 StructuredOutputInvoker.invoke，要求 ResumeEvaluation 模型输出。
+#### 3.4.3 `HttpPythonAgentClient` 与 `AgentCallExecutor`
 
-SkillRegistry.get（python-agent/app/tools/skills/loader.py:47-84）校验 ID 正则，读取 skill.json/SKILL.md，检查 enabled、ID 和 allowedTools，最后构造 SkillDefinition。PromptLoader.render（python-agent/app/common/prompt_loader.py:26-40）先 load，再逐个替换 {{变量}}，缺变量或残留占位符时抛异常；load（19-24 行）读取 UTF-8；_resolve（42-46 行）阻止路径越界。
+**文件与行号：** `HttpPythonAgentClient.java:46-47、65-96`，`AgentCallExecutor.java:22-43`。
 
-#### 3.8.3 StructuredOutputInvoker.invoke 及模型调用
+1. `evaluateResume` 第 46 行将请求交给 `AgentCallExecutor.execute`，内部 POST `/v1/agent/evaluate/resume`；`activateResumeMemory` 第 47 行同样 POST `/v1/agent/resume/activate`。
+2. `post` 第 65 行定义通用调用；第 66 行先 `validateRequest`；第 68 行用 RestClient 发请求并反序列化；第 69 行拒绝空响应；第 71-79 行分别保留已有异常、解析结构化错误、转换 HTTP 错误和网络错误。
+3. `parseStructuredError` 第 82-87 行尝试把错误体反序列化为 `AgentResponse`，仅带 `error` 的体才作为正常业务响应返回。
+4. `validateRequest` 第 89-96 行运行 Bean Validation；第 90 行获取违反项；第 91-94 行拼出字段名并抛不可重试请求异常。
+5. `AgentCallExecutor.execute` 第 22-34 行循环最多 `maxAttempts`；第 25-26 行执行调用；第 27-30 行只对可重试 Python 异常等待后重试；第 33 行作为理论兜底重新抛最后异常。`sleepBeforeRetry` 第 36-43 行睡眠、处理中断并恢复中断标志。
 
-文件：python-agent/app/infrastructure/reliability/structured_output.py:23-120。
+### 3.5 Python 激活记忆与简历评估函数
 
-1. 第 26-28 行构造函数保存 prompt loader 和 retry executor。
-2. invoke 第 38-45 行渲染 shared/structured-output.md，调用 schema.model_json_schema 和 _few_shot_output（123-154 行）生成格式约束。
-3. 第 46-49 行创建 SystemMessage/HumanMessage，输入以 JSON 序列化。
-4. 第 50-69 行循环调用 _invoke_model；成功时 _validate；解析或校验失败时追加修正消息，超过次数抛 ModelOutputError。
-5. _invoke_model（72-75 行）无执行器时直接 model.ainvoke，有执行器时交给 AsyncRetryExecutor.execute。
-6. _validate（77-84 行）调用 _content_as_text、_strip_json_fence、json.loads 和 schema.model_validate。
-7. _content_as_text（87-104 行）兼容字符串、消息 content、列表片段和映射；无法提取文本时抛 TypeError。
-8. _strip_json_fence（107-112 行）移除 Markdown 三反引号围栏。
-9. _readable_validation_error（115-120 行）把字段路径或异常压缩到500字符。
-10. AsyncRetryExecutor.execute（python-agent/app/infrastructure/reliability/retry.py:23-40）用 asyncio.wait_for 限制单次调用超时，按策略判断重试并退避；_is_retryable（42-43 行）按异常类名匹配；_backoff_seconds（45-50 行）计算指数退避。
+#### 3.5.1 FastAPI 路由和装配函数
 
-ResumeEvaluation 模型（python-agent/app/agents/evaluation/models.py:14-29）通过 Pydantic 校验六个评分范围、summary 长度、列表上限和 issue priority；alias 让输出字段匹配 Java 的 overallScore、technicalStack 等名称。LLMFactory.create_chat_model（python-agent/app/agents/llm/factory.py:12-39）校验 provider/model/API key，组装 timeout、temperature、max_retries=0 等参数并返回 ChatOpenAI。
+**文件与行号：** `python-agent/app/api/application.py:159-224、343-357、391-395、438-455`，`python-agent/app/bootstrap.py:33-43、94-104`。
 
-#### 3.8.4 MemoryService.record_resume_analysis
+1. `activate_resume_memory` 第 208-224 行：第 212 行保存请求上下文；第 213-217 行解析/惰性创建 `MemoryService` 并调用 `activate_resume`；第 218-223 行返回 code 100、COMPLETED 的 `AgentResponse`；第 224 行结束。
+2. `evaluate_resume` 第 159-206 行：第 161 行保存上下文；第 162 行计算输入指纹；第 163 行获取记忆服务；第 164-167 行按 runId/指纹查询幂等评估缓存；第 168-173 行未命中时解析评估 Agent 并调用 `evaluate`；第 174-191 行记录分析结果；第 192-199 行处理并发一致性异常时读取已保存的回放结果；第 200-205 行构造成功响应。
+3. `_remember_request_context` 第 391-395 行检测 Pydantic `model_dump`，并把 JSON 形态请求保存到 `request.state`，供异常处理保留 requestId、runId、sessionId。
+4. `_resolve_memory_service` 第 351-357 行优先复用 app state；缺失时导入并调用 `build_memory_service`，再回存。`_resolve_resume_evaluator` 第 343-348 行以相同模式创建评估 Agent。
+5. `_resume_evaluation_fingerprint` 第 438-444 行按 subject、文本、岗位组成排序稳定 JSON，再计算 SHA-256；相同 runId 的不同输入会被识别为一致性冲突。
+6. `build_memory_service` 第 33-38 行读取 settings、建会话工厂、以 PostgreSQL 记忆仓储和策略构造服务。`build_resume_evaluation_agent` 第 94-104 行创建重试器、模型、提示词加载器与 SkillRegistry，再构造 Agent。
 
-文件：python-agent/app/memory/service.py:177-234。第 185-187 行读取记忆；第 188-193 行对相同 runId 做幂等校验；第 194-196 行要求 active_resume_id 匹配；第 197-217 行更新或追加 ResumeMemory，截断问题和建议；第 220-223 行调用 _unique_items（275-277 行）去空白、去重和限长；第 224-232 行记录 ResumeEvaluationRun 并淘汰旧 run；第 233-234 行更新时间并 repository.save。
+#### 3.5.2 `MemoryService.activate_resume` 与评估结果写入
 
-## 4. 返回、失败与边界
+**文件与行号：** `python-agent/app/memory/service.py:48-96、176-245`。
 
-### 4.1 正常返回
+1. `activate_resume` 第 48-51 行声明输入；第 58-61 行调用 `_resume_activation_fingerprint`；第 62-65 行构造简历快照；第 66 行读取用户长期记忆。
+2. 第 67-75 行在首次用户场景构造 `LongTermMemory`，有 runId 时记录 activation run，然后创建数据库记录。
+3. 第 76-80 行在同 runId 已存在时验证 resumeId/指纹，一致则直接返回，冲突则抛 `ConsistencyError`。
+4. 第 81-96 行保存既有记忆：记录乐观锁版本，更新 active resume、合并快照、清空由旧评估派生的字段、记录受限数量的 run、更新时间，最后按 expected_version 保存。
+5. `_resume_activation_fingerprint` 第 255-264 行将 resumeId、candidateId、文本、岗位序列化为稳定 JSON 后做 SHA-256。
+6. `record_resume_analysis` 第 176-231 行先读取记忆，第 187-192 行识别同 run 回放或冲突，第 193-194 行拒绝非当前简历的迟到结果，第 195-216 行更新或补充简历快照，第 217-220 行用替换语义更新技术栈、深度、建议和偏好，第 221-230 行保存可回放评估 run 并限制数量，第 231 行乐观锁写入。
+7. `get_resume_evaluation_run` 第 233-245 行读取记忆、查 run、验证 resumeId/指纹，并只返回已保存的评估对象；这正是评估接口的幂等读取路径。
 
-同步返回的 data.storage.resumeId 是简历 ID，data.analysis.status 是 PENDING，data.analysis.analysisId 是后续 Rabbit 任务的分析主键。HTTP 200 只表示上传和任务受理成功，Python 模型可能仍在 PROCESSING。
+#### 3.5.3 `ResumeEvaluationAgent.evaluate`
 
-### 4.2 失败处理
+**文件与行号：** `python-agent/app/agents/evaluation/agent.py:25-50`。
 
-BusinessException、PythonAgentException、校验异常、数据访问异常和未知异常由 ApiExceptionHandler（java-backend/src/main/java/com/interviewguide/common/web/ApiExceptionHandler.java:31-129）统一转换。常见失败包括用户 ID 缺失、空文件、空文件名、岗位缺失、解析失败、空文本、路径越界、数据库失败、Rabbit 发布失败和 Python 依赖失败。异步 Worker 对可重试 Python 异常记录 retryable failure 并让 Rabbit 重投；最终失败写入 FAILED。
+1. 第 25-31 行声明异步评估函数及命名参数。
+2. 第 32 行对简历文本去空白；第 33-34 行拒绝空文本。
+3. 第 36 行从 `SkillRegistry` 取得 `resume-analyst` Skill；第 37-39 行从外置 `resources/prompts/resume/analysis.md` 渲染提示词，业务提示词不内嵌在代码里。
+4. 第 40-44 行组装 subjectId、岗位、标准化简历文本的模型输入。
+5. 第 45-50 行调用 `StructuredOutputInvoker.invoke`，传入模型、`ResumeEvaluation` schema、渲染好的提示词和输入；其重试器仅包裹模型调用与结构化结果校验，返回后即回到 API 路由构造响应。
 
-### 4.3 一致性边界
+## 4. 主流构建分析
 
-1. 文件写入后数据库保存失败时调用 delete 补偿。
-2. 消息只携带 ID，消费者重新查库，避免把原文和实体塞进队列。
-3. 新版本通过 currentResumeId 和前后两次 isCurrentResume 检查，旧结果不能覆盖新版本。
-4. Python 激活和评价都用 runId/fingerprint 幂等，长期记忆用 state_version 乐观锁。
-5. Java AgentCallExecutor 只对可恢复依赖有限重试。因此不能把 HTTP 200 解释为评价已经完成。
+当前实现采用“同步接收文件和建任务 + RabbitMQ 异步调用 Python + PostgreSQL 最终事实来源 + Redis 加速状态查询”的分层方式。它的优点是浏览器不等待模型、Java/Python 可独立扩缩容、任务状态可恢复、Redis 不可用不会丢失业务结果；缺点是端到端最终一致、需要处理重复消息和状态轮询，且本机限流回退不能提供跨实例严格限额。
 
-## 5. 源码文件与行号索引
+主流生产方案可进一步采用 **Transactional Outbox + 消费端幂等表/Inbox**：在创建 `resume_analyses` 的同一 PostgreSQL 事务中写一条 outbox 事件，由独立发布器可靠投递 RabbitMQ；消费者在同一事务中登记已处理消息 ID 再更新分析状态。优点是避免“数据库已提交但 RabbitTemplate 发送失败”或“消息已发送但事务回滚”的双写窗口，并使重放可审计；缺点是新增 outbox 表、轮询/CDC 发布器、清理策略和运维监控。
 
-- 前端：frontend/src/components/FileUploadCard.tsx:87-90；frontend/src/pages/UploadPage.tsx:13-29；frontend/src/api/resume.ts:8-13；frontend/src/api/request.ts:47-72、123-179。
-- Java 入口：java-backend/src/main/java/com/interviewguide/infrastructure/web/RequestIdFilter.java:23-41；java-backend/src/main/java/com/interviewguide/infrastructure/ratelimit/SimpleRateLimitFilter.java:38-61；java-backend/src/main/java/com/interviewguide/resume/controller/ResumeController.java:23-37。
-- Java 业务：java-backend/src/main/java/com/interviewguide/resume/service/ResumeService.java:74-138；ResumeAnalysisService.java:38-60；ResumeAnalysisPersistenceService.java:28-89；ResumeAnalysisWorker.java:48-160。
-- Python：python-agent/app/api/application.py:156-221、312-354、388-441；python-agent/app/memory/service.py:49-97、177-248；python-agent/app/agents/evaluation/agent.py:12-50；python-agent/app/infrastructure/reliability/structured_output.py:23-120。
-
-
-### 3.9 Python 响应辅助函数
-
-#### 3.9.1 _resolve_memory_service、_resolve_resume_evaluator
-
-文件：python-agent/app/api/application.py:340-354。
-
-1. _resolve_resume_evaluator 第 341 行从 request.app.state 读取 resume_evaluator。
-2. 第 342 行判断是否为空；第 343 行为空时调用 build_resume_evaluation_agent。
-3. 第 344 行把新实例写回 state，避免下一次请求重复组装模型客户端。
-4. 第 345 行返回 evaluator。
-5. _resolve_memory_service 第 349 行读取 memory_service；第 350 行判断空值；第 351-353 行懒加载并缓存 MemoryService；第 354 行返回缓存对象。
-6. 这两个函数只负责依赖解析，不执行评价或记忆业务；它们的“首次构造”和“后续复用”是两个实际分支。
-
-#### 3.9.2 _resume_evaluation_fingerprint
-
-文件：python-agent/app/api/application.py:435-441。
-
-1. 第 436 行用 json.dumps 开始构造规范化字符串。
-2. 第 437-439 行只纳入 subjectId、inputText、targetRole，ensure_ascii=False 保留中文，sort_keys=True 固定键顺序，紧凑 separators 消除无意义空格。
-3. 第 441 行把 UTF-8 字符串交给 hashlib.sha256 并返回十六进制摘要。
-4. 这个值与 Java 的 evaluationRunId 配合，保证同一 runId 不能写入不同的简历内容。
-
-#### 3.9.3 MemoryService.get_resume_evaluation_run
-
-文件：python-agent/app/memory/service.py:236-248。
-
-1. 第 239 行通过 repository.get 读取用户记忆；第 240-241 行没有记忆时返回 None。
-2. 第 242 行从 resume_evaluation_runs 按 run_id 取记录；第 243-244 行不存在时返回 None。
-3. 第 245-247 行比较已有记录的 resume_id 和 fingerprint；任意不一致抛 ConsistencyError。
-4. 第 248 行返回已有的 evaluation 对象，调用方随后跳过大模型。
-
-#### 3.9.4 Python AgentResponse 与契约校验
-
-文件：python-agent/app/common/contracts.py:125-185。
-
-1. AgentEvaluationRequest 第 128-138 行把 apiVersion、requestId、runId、userId、sessionId、operation、subjectType、subjectId、candidateId、inputText、targetRole 声明为别名字段；Pydantic 在进入路由函数前检查最小长度和 operation literal。
-2. AgentResumeMemoryActivationRequest 第 145-155 行声明同一公共字段及 subjectId/candidateId/inputText/targetRole。
-3. AgentResponse 第 161-175 行声明返回字段、code、status、sessionStatus、stateVersion、output、error，并以当前 UTC 时间作为 timestamp 默认值。
-4. validate_code_category 第 177-182 行检查 code 的百位必须在1到5，非法 code 在路由函数执行前被拒绝。
-5. to_json_dict 第 184-185 行以 JSON 模式、字段别名和不排除 None 的方式导出，保证 Java 能收到完整错误或成功契约。
-
-### 3.10 Python 写回分析与 Java 完成状态
-
-#### 3.10.1 ResumeAnalysisPersistenceService.complete
-
-文件：java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisPersistenceService.java:33-45。
-
-1. 第 34 行接收 Python AgentResponse。
-2. 第 35 行读取 response.output；第 36-38 行为空时抛 RESUME_ANALYSIS_OUTPUT_MISSING。
-3. 第 39-44 行调用 required(id)，并按字段调用 integer、string、json 后传给实体 complete。
-4. integer（91-95 行）读取 Map 值，Number 转 int；不是 Number 时抛 RESUME_ANALYSIS_OUTPUT_INVALID。
-5. string（97-101 行）要求值是非空 String，否则抛同一错误。
-6. json（103-106 行）把 null 转空列表并由 ObjectMapper 序列化；JsonProcessingException 转业务异常。
-7. required（86-89 行）按分析主键查询，找不到抛 RESUME_ANALYSIS_NOT_FOUND。
-
-#### 3.10.2 ResumeAnalysisEntity.complete、fail、truncate
-
-文件：java-backend/src/main/java/com/interviewguide/resume/domain/ResumeAnalysisEntity.java:69-100、131-133。
-
-1. 五参数 complete（69-75 行）把默认 issuesJson 设为 [] 后转调完整重载；它本身没有额外持久化动作。
-2. 完整 complete（77-94 行）第 81 行状态设为 COMPLETED；第 82-91 行逐项写入六个评分、summary、strengthsJson、suggestionsJson、issuesJson，并清空 error；第 93 行更新 updatedAt。
-3. fail（96-100 行）第 97 行状态设为 FAILED；第 98 行调用 truncate 保存错误；第 99 行更新时间。
-4. truncate（131-133 行）消息为 null 时使用默认文本，否则保留最多500字符，防止数据库 error 列超长。
-5. getId/getResumeId/getTargetRole/getStatus 等访问函数（111-129 行）逐个返回对应字段；Worker 使用 getResumeId、getTargetRole，Persistence 使用 getStatus、getRetryCount，View 转换使用评分、summary、JSON 和时间字段。它们没有副作用，不会改变状态。
-
-#### 3.10.3 Worker 完成和重试分支
-
-文件：java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisWorker.java:97-124。
-
-1. Python 返回 code 非 1xx/2xx时进入第 97 行条件。
-2. 第 98 行从 response.error 读取消息；第 99 行判断 retryable。
-3. 第 100 行对可恢复错误抛异常，使 Rabbit 监听器触发重新投递。
-4. 第 102-103 行对不可恢复错误调用 persistence.fail 并正常返回，消息不会继续重试。
-5. Python 返回成功后第 105-107 行 requireMatchingResponse 验证身份。
-6. 第 108 行检查任务未取消且 isCurrentResume 为真。
-7. 第 109 行调用 persistence.complete；第 110-112 行只要任务未取消但简历已替换，就把任务取消。
-8. 第 113-124 行捕获 activate、evaluate、数据库或解析异常；第 114-116 行已取消任务直接结束；第 117-120 行可重试且未超过 maxDeliveryAttempts 时记录错误并抛出；第 121-123 行否则写 FAILED。
-
-### 3.11 项目函数与框架函数的边界
-
-1. Spring 的 multipart 解析、参数绑定、@RequestPart 校验、DispatcherServlet 路由和异常分派不是项目定义函数，因此本文只在 Controller 入口处说明其结果。
-2. JpaRepository.findById、save 以及项目 Repository 的派生查询方法由项目声明、由 Spring Data 实现；本文分别列出声明文件和调用语义，没有虚构实现类。
-3. RabbitTemplate.convertAndSend、RabbitListener 消费循环、RestClient.retrieve/body、Tika.parseToString、MultipartFile.getBytes/getInputStream、Validator.validate 和 ChatOpenAI.ainvoke 都是第三方/框架函数；它们在链路中的入参、返回值和失败边界已逐行标出。
-4. Pydantic record/model 的默认构造、model_dump、model_validate、model_json_schema 是模型库函数；项目代码定义的是请求契约字段、调用位置以及别名，不把生成代码冒充为业务函数。
-5. RabbitMQ 配置函数在 java-backend/src/main/java/com/interviewguide/infrastructure/messaging/RabbitTaskConfiguration.java:25-61 于应用启动时创建交换机、队列、绑定和 RabbitTemplate；它们不是每次上传请求重新调用，但决定 enqueue 能否把消息送到 consume。
-
-## 6. 逐函数核对结论
-
-本链路已覆盖以下实际项目函数：前端 FileUploadCard.handleUpload、UploadPage.handleUpload、resumeApi.uploadAndAnalyze、request.upload、createClientId、currentUserId；Java RequestIdFilter.doFilterInternal/normalize、SimpleRateLimitFilter.doFilterInternal、ResumeController.upload、ApiResult.success、UserIdentityResolver.require、ResumeService.upload、ResumeFileStorageService.inspect/sha256/store、ResumeAnalysisService.submit/requiredResume/toView/stringList/mapList/safeMessage、ResumeAnalysisPersistenceService.create/cancelActiveForResumeIds/beginAttempt/required/complete/fail/integer/string/json、ResumeAnalysisWorker.enqueue/process/isCurrentResume/requireSuccess/requireMatchingResponse/safeMessage、RabbitAgentWorkConsumer.consume、AgentCallExecutor.execute/sleepBeforeRetry、HttpPythonAgentClient.activateResumeMemory/evaluateResume/post/validateRequest/parseStructuredError，以及 Python activate_resume_memory/evaluate_resume/_remember_request_context/_resolve_memory_service/_resolve_resume_evaluator/_resume_evaluation_fingerprint、MemoryService.activate_resume/get_resume_evaluation_run/record_resume_analysis/_merge_resume_snapshot/_unique_items、PostgresLongTermMemoryRepository.get/create/save/_to_entity、ResumeEvaluationAgent.__init__/evaluate、SkillRegistry.get、PromptLoader.load/render/_resolve、StructuredOutputInvoker.__init__/invoke/_invoke_model/_validate/_content_as_text/_strip_json_fence/_readable_validation_error/_few_shot_output、AsyncRetryExecutor.execute/_is_retryable/_backoff_seconds、LLMFactory.create_chat_model，以及相关实体状态函数。\n\n这条链的终点是 Python 两个 FastAPI 路由已经完成自身 service 调用并返回 AgentResponse；Java 收到后继续执行状态校验和分析持久化，但不会把 Python 的成功响应误当成浏览器同步等待的模型结果。\n
-
-
-### 3.12 文件选择、前端回调与错误辅助函数
-
-#### 3.12.1 FileUploadCard.handleDrop 与 handleFileChange
-
-文件：frontend/src/components/FileUploadCard.tsx:69-85。
-
-1. handleDrop 第 69 行定义拖放回调；第 70 行 preventDefault 阻止浏览器打开文件；第 71 行清除 dragOver；第 72 行读取 dataTransfer.files；第 73 行判断至少一个文件；第 74 行选择第一个文件；第 75 行调用可选的 onFileSelect；第 77 行声明依赖。
-2. handleFileChange 第 79 行定义 input change 回调；第 80 行读取 input.files；第 81 行判断列表存在且非空；第 82 行保存第一个 File；第 83 行调用 onFileSelect；第 85 行声明依赖。
-3. 两个函数都不会直接发请求，真正的请求由后续 handleUpload 发起；这两个入口解释了“点击选择”和“拖拽上传”两条前端可达路径。
-
-#### 3.12.2 App.UploadPageWrapper.handleUploadComplete
-
-文件：frontend/src/App.tsx:29-38。第 33 行定义上传完成回调；第 35 行调用 navigate('/history', {state:{newResumeId:resumeId}})。它只改变前端路由，不查询 Python，也不表示分析已经完成。
-
-#### 3.12.3 前端错误函数
-
-文件：frontend/src/api/request.ts:75-121、185-200。
-
-- isRecord（75-77 行）只接受非 null、object 且非数组的值。
-- stringValue（79-81 行）只返回非空字符串。
-- parseApiError（83-99 行）先拒绝非对象，再取嵌套 error 或外层 code；第 88-98 行构造 ApiRequestError，保留 retryable、HTTP 状态、requestId、runId、sessionId 和 stage。
-- decodeErrorData（101-108 行）只对 JSON Blob 调 text 和 JSON.parse，解析失败返回原 Blob。
-- transportError（110-121 行）根据 URL 或 Content-Type 判断是否上传，超时时返回 NETWORK_TIMEOUT，其余返回 NETWORK_UNAVAILABLE。
-- getErrorMessage（185-187 行）对 Error 返回 message，否则返回“发生未知错误”。
-- getErrorDisplayMessage（190-200 行）先调用 getErrorMessage；ApiRequestError 还会拼接错误码、阶段、是否可重试和 requestId。这些函数最终服务于 UploadPage.catch。
-
-### 3.13 Java ID 与任务状态辅助函数
-
-#### 3.13.1 BusinessIdGenerator.next
-
-文件：java-backend/src/main/java/com/interviewguide/common/id/BusinessIdGenerator.java:13-16。
-
-1. 第 14 行用 AtomicLong.updateAndGet，在当前 JVM 内取“当前毫秒时间”和“上一次 ID+1”的较大值，保证同一毫秒并发上传仍不冲突。
-2. 第 15 行把 long 转为字符串，作为 candidateId 或 resumeId。
-3. 第 16 行返回该字符串。该实现只提供单 JVM 单调 ID，多实例部署需要换成数据库序列或雪花 ID。
-
-#### 3.13.2 ResumeAnalysisPersistenceService.cancel、isCancelled
-
-文件：java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisPersistenceService.java:81-84。
-
-1. cancel 第 82 行调用 required(id)，再调用实体 cancel；事务提交后旧消息会在 Worker 的第一道检查中被丢弃。
-2. isCancelled 第 84 行调用 required(id).isCancelled；如果记录不存在，required 先抛 RESUME_ANALYSIS_NOT_FOUND，而不是把不存在当成可取消。
-3. Worker 第 114 行和第 121 行使用该函数区分“用户已取消的正常旧消息”和“真正的基础设施异常”。
-
-
-### 3.14 上传接口审核补充：此前合并说明的函数逐项展开
-
-#### 3.14.1 ResumeAnalysisWorker.isRetryable
-
-文件：java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisWorker.java:127-129。
-
-1. 第 127 行声明私有布尔函数，输入为 process 捕获到的 RuntimeException。
-2. 第 128 行使用 Java 模式匹配；只有 error 是 PythonAgentException 时才绑定为 gatewayError。
-3. 同一行随后调用 gatewayError.retryable()；只有 Python HTTP 客户端明确标记可重试的异常才返回 true。
-4. 第 129 行结束函数。普通数据库、序列化或编程异常不会被这个函数误当作可重试 Python 依赖错误。
-
-#### 3.14.2 ResumeAnalysisPersistenceService.recordRetryableFailure
-
-文件：java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisPersistenceService.java:76-79。
-
-1. 第 76 行标注 Transactional，保证状态更新在数据库事务中提交。
-2. 第 77 行声明函数，接收分析主键与经 safeMessage 截断后的错误文本。
-3. 第 78 行先调用 required(id) 查询任务，缺失时抛 RESUME_ANALYSIS_NOT_FOUND；查到后调用实体 recordRetryableFailure。
-4. 第 79 行结束函数。它只记录错误及更新时间，刻意不把状态改为 FAILED，以便 Rabbit 可以再次投递。
-
-#### 3.14.3 ResumeAnalysisEntity.recordRetryableFailure
-
-文件：java-backend/src/main/java/com/interviewguide/resume/domain/ResumeAnalysisEntity.java:64-67。
-
-1. 第 64 行定义状态辅助函数，参数是可重试错误文本。
-2. 第 65 行调用 truncate，把消息限制为数据库 error 字段的安全长度并写入 error。
-3. 第 66 行把 updatedAt 设为当前 Instant。
-4. 第 67 行结束函数。status 保持 PROCESSING 或 PENDING，因此 beginAttempt 仍可接受后续重新消费。
-
-#### 3.14.4 ResumeAnalysisPersistenceService.fail 与 ResumeAnalysisEntity.fail
-
-文件：ResumeAnalysisPersistenceService.java:47-49；ResumeAnalysisEntity.java:96-100。
-
-1. Persistence 的第 47 行标注 Transactional；第 48 行先 required(id) 再调用实体 fail；第 49 行结束一行委托函数。
-2. 实体 fail 的第 96 行定义函数；第 97 行把 status 固定写成 FAILED；第 98 行截断并保存错误；第 99 行更新时间；第 100 行结束。
-3. 因此不可重试 Python 返回、超出 Rabbit 尝试上限的异常都会持久化为最终失败，而不是继续留下不明确的 PROCESSING。
-
-#### 3.14.5 AgentCallExecutor 的构造函数和 sleepBeforeRetry
-
-文件：java-backend/src/main/java/com/interviewguide/infrastructure/reliability/AgentCallExecutor.java:16-20、36-43。
-
-1. 构造函数第 16-17 行接收配置的 maxAttempts 与 backoffMillis。
-2. 第 18 行用 Math.max(1, maxAttempts) 保证至少执行一次。
-3. 第 19 行用 Math.max(0, backoffMillis) 防止负睡眠时间。
-4. sleepBeforeRetry 第 37 行进入 try；第 38 行 Thread.sleep(backoffMillis)。
-5. 第 39-42 行捕获 InterruptedException；第 40 行恢复线程中断标志；第 41 行包装成不可重试 PythonAgentException；第 43 行结束。
-6. 该函数只由 execute 的第 30 行调用，且仅在还有重试机会时调用。
-
-#### 3.14.6 HttpPythonAgentClient 的两个入口函数和请求 DTO
-
-文件：java-backend/src/main/java/com/interviewguide/pythonagent/mapper/HttpPythonAgentClient.java:46-47；AgentResumeEvaluateRequest.java:8-20；AgentResumeMemoryActivationRequest.java:8-20。
-
-1. evaluateResume 第 46 行创建 Supplier lambda；Supplier 被 execute 重试时会重新进入 post，路径恒为 /v1/agent/evaluate/resume。
-2. activateResumeMemory 第 47 行采用相同结构，路径恒为 /v1/agent/resume/activate。
-3. 两个 Java record 都在第 8 行声明规范化请求字段；第 9-19 或第 9-20 行为 apiVersion、requestId、runId、userId、sessionId、operation、主体标识、简历文本、岗位和 timestamp 标记 NotBlank/NotNull。
-4. record 的成员访问器由 Java 编译器生成，源码没有自定义实现；业务代码通过构造参数把 ResumeEntity 和 ResumeAnalysisEntity 的值映射到 HTTP JSON。
-
-#### 3.14.7 Python build_resume_evaluation_agent
-
-文件：python-agent/app/bootstrap.py:86-96。
-
-1. 第 86-88 行定义 builder，可选传入 Settings，测试可传入替代配置。
-2. 第 89 行选择传入 settings 或调用 get_settings。
-3. 第 90 行调用 RetryPolicy.load，读取模型调用的次数、超时和退避配置。
-4. 第 91 行开始构造 ResumeEvaluationAgent。
-5. 第 92 行调用 LLMFactory.create_chat_model，创建实际 ChatOpenAI 客户端但尚未发模型请求。
-6. 第 93 行构造 PromptLoader；第 94 行构造 SkillRegistry；第 95 行传入 retry executor；第 96 行结束并返回 Agent。
-7. state 缓存由 _resolve_resume_evaluator 负责，builder 本身不写 request.app.state。
-
-#### 3.14.8 LLMFactory.create_chat_model
-
-文件：python-agent/app/agents/llm/factory.py:12-39。
-
-1. 第 13 行定义静态工厂；第 14 行取得 Settings。
-2. 第 16-20 行声明并检查允许的 provider，未知 provider 抛 ModelConfigurationError。
-3. 第 21-24 行分别要求 model_name 与 model_api_key 非空。
-4. 第 26-33 行组装 model_kwargs：模型名、密钥、temperature、timeout 和 max_retries=0；重试由 AsyncRetryExecutor 统一控制。
-5. 第 34-35 行可选加入 base_url；第 36-37 行可选加入 max_tokens。
-6. 第 39 行用这些参数构造并返回 ChatOpenAI。网络调用只发生在后续 model.ainvoke。
-
-#### 3.14.9 RetryPolicy.load
-
-文件：python-agent/app/infrastructure/reliability/policy.py:20-45。
-
-1. 第 21 行定义类方法并允许测试指定 JSON 路径。
-2. 第 22 行选择传入路径或 resources/agent/reliability.json。
-3. 第 24 行读取 UTF-8 JSON；第 25-31 行把每项转换为明确类型并构造 policy。
-4. 第 33-34 行把文件不存在、键缺失、类型和值错误转为 ReliabilityConfigurationError。
-5. 第 35-44 行分别验证次数范围、退避大小关系、单次超时范围、输出修复次数以及可重试错误集合非空。
-6. 第 45 行返回通过审核的不可变策略。
-
-#### 3.14.10 StructuredOutputInvoker._few_shot_output
-
-文件：python-agent/app/infrastructure/reliability/structured_output.py:123-154。
-
-1. 第 123-124 行定义函数和用途：为不同 Pydantic schema 提供合法最小示例。
-2. 第 125-149 行建立 examples 字典，其中 ResumeEvaluation 的示例在第 126-131 行提供 Java 持久化所需的评分、摘要、列表和技术画像字段。
-3. 第 150-153 行为 CrawlPageDecision 单独返回示例；该分支不会被简历评价调用。
-4. 第 154 行用 schema.__name__ 从 examples 取值，未知 schema 返回空字典。
-5. ResumeEvaluationAgent 调用 invoke 时会命中 ResumeEvaluation 分支，因此 format_prompt 中带有可验证样例。
-
-
-#### 3.14.11 ResumeFileStorageService.delete：上传失败补偿
-
-文件：java-backend/src/main/java/com/interviewguide/resume/service/ResumeFileStorageService.java:49-54。
-
-1. 第 49 行定义删除函数并接收 storageKey。
-2. 第 50 行对 null 或 blank key 直接 return；这保证补偿调用本身幂等。
-3. 第 51 行把 key 解析到 root 下并 normalize。
-4. 第 52 行检查路径仍以 root 开头；不满足时抛 IOException，防止删除根目录外文件。
-5. 第 53 行调用 Files.deleteIfExists；文件已不存在时不抛异常。
-6. 第 54 行结束函数。ResumeService.upload 第 127 行只在 ResumeRepository.save 抛 RuntimeException 后调用它，因此其责任是回收“文件已成功写入、数据库事务未完成”的孤立文件。
+本项目适合在任务量增加、需要更高投递可靠性时采用。实施步骤是：第一，在 `infrastructure/postgres/init` 增加 `outbox_events` 与 `processed_messages` 表；第二，把 `ResumeAnalysisWorker.enqueue` 改为由 `ResumeAnalysisPersistenceService.create` 写 outbox，而非直接 `convertAndSend`；第三，新增定时发布器或 Debezium CDC 将未发布事件推送交换机，并在成功后标记；第四，让 `RabbitAgentWorkConsumer` 以消息 ID 写 Inbox 后再处理；第五，继续保持当前“事务提交后才刷新 Redis”的规则。对于当前实习项目，现有实现更轻量；Outbox 应在需要可靠跨服务投递时再引入。

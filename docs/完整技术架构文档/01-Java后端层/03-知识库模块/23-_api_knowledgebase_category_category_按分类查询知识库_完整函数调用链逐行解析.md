@@ -1,80 +1,77 @@
-# GET /api/knowledgebase/category/{category}：按分类查询知识库的完整函数调用链
+# GET /api/knowledgebase/category/{category}：按分类查询知识库完整函数调用链逐行解析
+
+> 当前实现把 owner 与分类条件一并下推到 MyBatis SQL，然后将实体转换为带 Java Redis 索引状态快照的视图。它不调用 Python 或 RabbitMQ。
 
 ## 1. 接口定义
 
-接口按路径中的分类精确查询当前用户的知识库，返回 KnowledgeBaseView 列表。前端对分类进行 URL 编码，Java Repository 同时限定 ownerId/category。接口不调用 Python。
+### 1.1 功能与作用
 
-| 项目 | 内容 |
+`GET /api/knowledgebase/category/{category}` 返回当前用户某一个精确分类下的知识库。分类作为路径变量直接传递给 Mapper 参数；不存在分类返回空数组。
+
+### 1.2 基本信息
+
+| 项目 | 当前实现 |
 | --- | --- |
-| 方法/路径 | GET `/api/knowledgebase/category/{category}` |
-| 分类匹配 | Repository 精确值匹配 |
-| 返回 | `ApiResult<List<KnowledgeBaseView>>` |
-| Python 调用 | 无 |
+| 路径 | `GET /api/knowledgebase/category/{category}` |
+| Controller | `KnowledgeBaseController.byCategory`，`KnowledgeBaseController.java:89-93` |
+| SQL | `WHERE owner_id=#{ownerId} AND category=#{category}` |
+| 状态显示 | `toView` 优先 Java Redis 索引快照 |
+| Python/MQ | 无调用。|
+
+### 1.3 前端入口
+
+`knowledgeBaseApi.byCategory` 在 `frontend/src/api/knowledgebase.ts:137-139`，以 `encodeURIComponent(category)` 保护路径段。
 
 ## 2. 函数调用链
 
-~~~text
-KnowledgeBaseManagePage.loadData → knowledgeBaseApi.getByCategory
- -> encodeURIComponent → request.get → Axios/Filter
- -> KnowledgeBaseController.byCategory
- -> KnowledgeBaseService.byCategory
-    -> UserIdentityResolver.require
-    -> Repository.findByOwnerIdAndCategory
-    -> KnowledgeBaseService.toView
- -> ApiResult.success → setKnowledgeBases
-~~~
+```text
+knowledgeBaseApi.byCategory -> request.get -> Axios interceptor
+  -> RequestIdFilter -> SimpleRateLimitFilter -> IdempotencyFilter(GET skip)
+  -> KnowledgeBaseController.byCategory -> KnowledgeBaseService.byCategory
+     -> UserIdentityResolver.require -> KnowledgeBaseRepository.findByOwnerIdAndCategory
+        -> MyBatis XML SELECT -> KnowledgeBaseService.toView
+        -> JavaTaskStatusCache.knowledgeBaseIndex / JavaRedisStore.getJson
+  -> ApiResult.success
+```
 
 ## 3. 函数解析
 
-### 3.1 前端函数
+### 3.1 前端、过滤器与 Controller 函数
 
-#### 3.1.1 `knowledgeBaseApi.getByCategory`
+#### 3.1.1 `knowledgeBaseApi.byCategory` 与 request 函数
 
-文件：`frontend/src/api/knowledgebase.ts:137-139`。
+**文件与行号：** `frontend/src/api/knowledgebase.ts:137-139`，`frontend/src/api/request.ts:47-72、123-164`。
 
-1. 第 137 行接收 category 并声明数组返回。
-2. 第 138 行 encodeURIComponent 防止中文、斜杠、空格等破坏路径，再调用 request.get；第 139 行结束。
-3. ManagePage 的 loadData/loadDataSilent（141-180 行）在 category 非 `all` 时选择此函数，成功后 setKnowledgeBases。
+1. 第 138 行对 category 做 `encodeURIComponent`，防止空格、斜杠和 `?` 改变 URL 结构，然后调用 request.get。
+2. request.ts 创建/读取客户端用户 ID、拦截器写 X-User-Id/X-Request-Id、成功时解包 code=200、失败时返回 ApiRequestError。
 
-#### 3.1.2 `request.get` 与拦截器
+#### 3.1.2 Java 通用过滤器与 `byCategory` Controller
 
-文件：`frontend/src/api/request.ts:47-73、123-160`。
+**文件与行号：** `infrastructure/web/RequestIdFilter.java:23-41`、`ratelimit/SimpleRateLimitFilter.java:48-82`、`idempotency/IdempotencyFilter.java:41-44`；`KnowledgeBaseController.java:89-93`。
 
-1. request.get 第 158-160 行执行 Axios GET 并取 data。
-2. createClientId/currentUserId 第 47-58 行生成请求 ID/读取 owner；请求拦截器第 64-73 行写用户和请求头。
-3. 响应拦截器第 123-155 行解包 code=200 或把服务/网络错误转项目异常。
+1. RequestId 规范并回传追踪 ID；限流通过 Redis INCR 或本机窗口；GET 跳过幂等键逻辑。
+2. Controller 第 89 行映射路径；第 90-91 行绑定 category 和用户头；第 92 行调用 service 后 success 包装；第 93 行结束。
 
-### 3.2 Java 函数
+### 3.2 Java Mapper、缓存与视图函数
 
-#### 3.2.1 `KnowledgeBaseController.byCategory`
+#### 3.2.1 `KnowledgeBaseService.byCategory`
 
-文件：`java-backend/src/main/java/com/interviewguide/knowledgebase/controller/KnowledgeBaseController.java:89-93`。
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/knowledgebase/service/KnowledgeBaseService.java:199-201`。
 
-1. 第 89 行映射 `/category/{category}`；第 90-91 行绑定解码后的 category 和身份头。
-2. 第 92 行调用 service.byCategory 并 ApiResult.success；第 93 行结束。
+1. 第 200 行先 `identity.require(userId)`，再调用 `findByOwnerIdAndCategory`。查询结果流逐个调用 `toView` 并收集列表。
+2. 第 201 行结束。没有额外 Java 内存分类过滤，权限和分类均在 SQL 条件中。
 
-#### 3.2.2 `KnowledgeBaseService.byCategory`
+#### 3.2.2 Mapper 与 `toView`
 
-文件：`java-backend/src/main/java/com/interviewguide/knowledgebase/service/KnowledgeBaseService.java:189-191`。
+**文件与行号：** `KnowledgeBaseRepository.java:16`，`resources/mapper/knowledgebase/KnowledgeBaseRepository.xml:6`，`KnowledgeBaseService.java:237-250`。
 
-1. 第 189 行定义函数。
-2. 第 190 行 identity.require 后调用 `findByOwnerIdAndCategory(owner,category)`；随后 stream.map(this::toView).toList。
-3. 第 191 行结束。Service 不 trim/忽略大小写，匹配语义由 Repository/数据库等值决定。
+1. Mapper 第 16 行以 @Param 命名 owner/category；XML 第 6 行执行两个等值条件的 select。
+2. `toView` 第 238 行读取 task cache；第 239-242 行 Redis 状态/error 存在且为 String 时覆盖实体值，缺失/异常回退数据库值；第 243-249 行构造完整视图。
 
-#### 3.2.3 `require`、Repository、`toView`
+## 4. 主流构建分析
 
-文件：`common/security/UserIdentityResolver.java:14-19`；`KnowledgeBaseRepository.java:10-26`；`KnowledgeBaseService.java:225-233`。
+精确分类 SQL 简单且权限正确，但 category 区分大小写、空白和别名，容易形成近似重复分类。
 
-1. require 第 15-19 行拒绝空用户、strip 并返回 owner。
-2. Repository 的 `findByOwnerIdAndCategory` 是项目声明的 Spring Data 派生查询，避免跨用户读取。
-3. toView 第 225-233 行逐项调用实体 getter，构造 ID、名称、分类、文件、向量状态、来源和时间字段。
+主流方式是独立分类表或规范化分类键（slug），知识库保存 category_id，并用唯一约束管理名称。优点是避免脏分类、可扩展层级/颜色/排序；缺点是上传、迁移与查询多一张表。
 
-### 3.3 Python 边界
-
-1. 调用链不含 indexRag/deleteRag、PythonAgentClient、RabbitTemplate 或 `/v1/**`。
-2. 即使列表中的 vectorStatus 为 PROCESSING，本查询也只读 Java 状态，不向 Python 询问实时进度；Java→Python 次数为零。
-
-## 4. 审核结论
-
-1. 已覆盖 URL 编码、用户/分类复合查询和 DTO 投影。
-2. 每个可达项目函数均标注文件、行号并逐句说明；确认不调用 Python。
+本项目当前可先在 `updateCategory`/上传时 trim 并统一大小写；若分类运营需求增加，再建 categories 表，Mapper 改 join/category_id 查询，并迁移现有字符串。

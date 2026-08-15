@@ -1,142 +1,117 @@
-# GET /api/interviews/{sessionId}：查询面试详情的完整函数调用链
+# GET /api/interviews/{sessionId}：查询面试详情完整函数调用链逐行解析
 
-> 对应接口汇总第 10 项。详情由 Java 已持久化的会话和回合数据组成，不访问 Python 实时状态，也不调用 Python Agent。
+> 当前详情接口从 Java 的 MyBatis 持久化记录读取会话与 turn；它不会调用 Python、RabbitMQ 或 Redis。先校验用户对 session 的所有权，才读取候选人回答和评价摘要。
 
 ## 1. 接口定义
 
 ### 1.1 功能与作用
 
-接口按会话 ID 返回当前用户的一场文字面试详情：一份 InterviewView 会话快照，以及按创建时间排序的 InterviewTurnView 回合数组。回合中的问题、回答、评分和评语都是 Java 在提交答案流程中已保存的数据。该接口只读，不会继续出题、评价、暂停或完成会话。
+`GET /api/interviews/{sessionId}` 返回一场面试的会话视图和按时间顺序排列的题目/回答 turn。每个 turn 被加上从 0 开始的 `index`，供前端恢复对话进度。该接口用于继续既有面试、历史面试详情和简历详情页的面试抽屉。
 
 ### 1.2 基本信息
 
-| 项目 | 内容 |
+| 项目 | 当前实现 |
 | --- | --- |
-| HTTP 方法 | GET |
-| 路径 | `/api/interviews/{sessionId}` |
-| Controller | `InterviewController.get` |
-| 返回 | `ApiResult<InterviewDetailView>` |
-| 身份头 | `X-User-Id` |
-| Repository | 会话按主键查询；回合按 createdAt 升序查询 |
-| Python 调用 | 无 |
+| 方法与路径 | `GET /api/interviews/{sessionId}` |
+| Controller | `InterviewController.get`，`java-backend/src/main/java/com/interviewguide/interview/controller/InterviewController.java:53-57` |
+| 输入 | sessionId、X-User-Id |
+| 响应 | `ApiResult<InterviewDetailView>`，包含 session 与 turns |
+| 数据 | interview_sessions、interview_turns；MyBatis 查询 |
+| Python/MQ | 无调用。详情读取不会补发问题、提交回答或恢复 Agent。|
+
+### 1.3 前端入口
+
+`frontend/src/api/interview.ts:73-76` 的 `getSession` 用于面试页恢复会话；`frontend/src/api/history.ts:87` 的 `getInterviewDetail` 用于历史/简历详情展示。两者请求同一个 Java 路径。
 
 ## 2. 函数调用链
 
-~~~text
-InterviewPage.resumeExistingSession（或完成后刷新）
- -> interviewApi.getSession
- -> request.get → Axios 拦截器 → currentUserId/createClientId
- -> RequestIdFilter.doFilterInternal → normalize
- -> SimpleRateLimitFilter.doFilterInternal
- -> InterviewController.get
-    -> UserIdentityResolver.require
-    -> InterviewService.detail
-       -> InterviewService.ownedSession
-          -> InterviewSessionPersistenceService.load
-             -> InterviewSessionRepository.findById
-          -> InterviewSessionEntity.getUserId
-       -> InterviewSessionPersistenceService.turns
-          -> InterviewTurnRepository.findBySessionIdOrderByCreatedAt
-       -> InterviewTurnEntity getter（每条回合）
-       -> InterviewService.toView
-          -> parseFinalEvaluation → InterviewSessionEntity getter
- -> ApiResult.success → Axios 响应拦截器
- -> interviewApi.toSession → InterviewPage.initSession
-~~~
+```text
+interviewApi.getSession 或 historyApi.getInterviewDetail -> request.get
+  -> Axios interceptor -> currentUserId / createClientId
+  -> RequestIdFilter.doFilterInternal -> normalize
+  -> SimpleRateLimitFilter.doFilterInternal -> JavaRedisStore.incrementInFixedWindow
+  -> IdempotencyFilter.shouldNotFilter（GET 跳过）
+  -> InterviewController.get -> UserIdentityResolver.require -> InterviewService.detail
+     -> ownedSession -> InterviewSessionPersistenceService.load
+        -> InterviewSessionRepository.findById -> MyBatis XML
+        -> assert userId
+     -> InterviewSessionPersistenceService.turns
+        -> InterviewTurnRepository.findBySessionIdOrderByCreatedAt -> MyBatis XML
+     -> IntStream.mapToObj Lambda -> InterviewTurnView
+     -> InterviewService.toView -> parseFinalEvaluation
+  -> ApiResult.success -> Axios response interceptor -> 前端恢复/展示
+```
 
 ## 3. 函数解析
 
 ### 3.1 前端函数
 
-#### 3.1.1 `InterviewPage.resumeExistingSession`
+#### 3.1.1 `interviewApi.getSession` 与 `historyApi.getInterviewDetail`
 
-文件：`frontend/src/pages/InterviewPage.tsx:148-167`。
+**文件与行号：** `frontend/src/api/interview.ts:73-76`，`frontend/src/api/history.ts:87`。
 
-1. 第 148 行定义恢复函数，参数是已有 sessionId；第 149-150 行进入创建中状态并清空错误。
-2. 第 153 行 await `interviewApi.getSession(sessionId)`；第 154 行将结果传给 initSession。
-3. 第 157-160 行读取当前问题；若当前题已存在用户答案则回填输入框。
-4. 第 161-163 行把失败转换为可显示文本；第 164-166 行 finally 恢复创建状态。
+1. `getSession` 第 73 行接收 sessionId；第 74 行调用 `request.get<InterviewDetailView>`；第 75 行将详情转换为面试页 session 形状；第 76 行结束。
+2. `getInterviewDetail` 第 87 行直接对相同模板 URL 调用 `request.get<InterviewDetail>`，用于历史页而不做面试页转换。
+3. 两个调用均先经过 `request.ts:47-72`：`createClientId` 第 47-49 行创建 ID，`currentUserId` 第 52-57 行读写 localStorage，请求拦截器第 64-72 行写用户与 requestId。
+4. `request.get` 第 158-160 行返回 Axios data；响应拦截器第 123-135 行解包 Java 200 包装，错误拦截器第 136-154 行处理传输、业务和 HTTP 错误。
 
-#### 3.1.2 `interviewApi.getSession` 与 `toSession`
+### 3.2 Java 入口与保护函数
 
-文件：`frontend/src/api/interview.ts:41-51、73-76`。
+#### 3.2.1 `RequestIdFilter`、限流和幂等跳过
 
-1. getSession 第 73 行声明返回 InterviewSession；第 74 行 GET `/api/interviews/${sessionId}`；第 75 行把 detail.session 和 detail.turns 传入 toSession；第 76 行结束。
-2. toSession 第 42 行把回合逐条映射为 `toQuestion`；第 43-45 行仅在 ACTIVE/PAUSED 时追加 currentQuestion。
-3. 第 46-50 行展开会话字段、计算 currentQuestionIndex 并返回前端状态对象。
-4. toQuestion 位于第 34-39 行：第 35 行构造对象，第 36-38 行把 index、问题、stage、回答、评语和分数逐项映射。
+**文件与行号：** `RequestIdFilter.java:23-41`、`SimpleRateLimitFilter.java:48-82`、`IdempotencyFilter.java:41-44`，均位于 `java-backend/src/main/java/com/interviewguide/infrastructure/`。
 
-#### 3.1.3 通用请求、响应函数
+1. RequestId filter 第 25-33 行调用 `normalize`、保存/回传 ID、写 MDC、放行并 finally 清理；第 36-41 行对不安全请求 ID 生成 UUID。
+2. 限流第 54-67 行通过 `JavaRedisStore.incrementInFixedWindow` 做 Redis INCR/TTL，失败回退 ConcurrentHashMap；第 69-79 行超限返回 429，第 81 行继续。
+3. `shouldNotFilter` 第 42-44 行只允许有幂等键的写操作处理；本 GET 没有 `doFilterInternal` 分支。
 
-文件：`frontend/src/api/request.ts:47-73、75-155、157-160`。
+#### 3.2.2 `InterviewController.get`、身份与成功包装
 
-1. request.get 第 158-160 行调用 Axios GET 并取 data。
-2. createClientId 第 47-50 行生成 UUID 或兼容 ID；currentUserId 第 52-58 行从 localStorage 读取或首次生成用户 ID。
-3. 请求拦截器第 64-73 行创建 header setter、写入 X-User-Id 和 X-Request-Id。
-4. 成功响应拦截器第 123-135 行识别 ApiResult code=200 并在第 128 行解包 data；失败回调第 136-155 行使用 decodeErrorData、parseApiError、transportError 生成 rejected Promise。
+**文件与行号：** `InterviewController.java:53-57`，`common/security/UserIdentityResolver.java:14-19`，`common/web/dto/ApiResult.java:3-6`。
 
-### 3.2 Java HTTP 与授权函数
+1. Controller 第 53 行映射 `/{sessionId}`；第 54 行绑定路径；第 55 行绑定用户头；第 56 行先 require 再调用 detail 并包装；第 57 行结束。
+2. `require` 第 15-17 行拒绝空身份，第 18 行去空白，第 19 行返回；`success` 第 4-5 行构造 code 200、message success 和 data。
 
-#### 3.2.1 `RequestIdFilter` 与 `SimpleRateLimitFilter`
-
-文件：`infrastructure/web/RequestIdFilter.java:23-41`；`infrastructure/ratelimit/SimpleRateLimitFilter.java:38-61`。
-
-1. RequestIdFilter 第 25 行 normalize 请求 ID；第 26-28 行写 attribute/header/MDC；第 30 行放行；第 31-33 行 finally 清理。normalize 第 36-41 行校验字符/长度或生成 UUID。
-2. RateLimitFilter 第 44-48 行按 IP、URI、分钟计算并增加计数；超过限制时第 49-58 行写 429，正常时第 60 行进入 Controller。
-
-#### 3.2.2 `InterviewController.get` 与 `UserIdentityResolver.require`
-
-文件：`InterviewController.java:53-57`；`common/security/UserIdentityResolver.java:14-19`。
-
-1. 第 53 行映射 `/{sessionId}`；第 54-55 行绑定路径和身份头。
-2. 第 56 行先 require，再调用 `interviewService.detail(sessionId,owner)`，并用 ApiResult.success 包装。
-3. require 第 15-17 行拒绝空用户 ID，第 18 行 strip，第 19 行返回 owner。
-
-### 3.3 Java 会话与回合读取函数
+### 3.3 Java 详情、Mapper 与视图函数
 
 #### 3.3.1 `InterviewService.detail`
 
-文件：`java-backend/src/main/java/com/interviewguide/interview/service/InterviewService.java:112-123`。
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/interview/service/InterviewService.java:111-123`。
 
-1. 第 113 行调用 ownedSession 完成存在和所有权校验。
-2. 第 114-115 行调用 persistence.turns 查询已保存回合。
-3. 第 116 行用 IntStream 产生从 0 起的展示 index；第 117-121 行对每个 turn 调 getter 并构造 InterviewTurnView。
-4. 第 122 行把 toView(session) 和 indexedTurns 构造成 InterviewDetailView；第 123 行结束。
+1. 第 112 行声明 Controller 专用详情函数。第 113 行先调用 `ownedSession`，因此后续不会在未授权 session 上读取 turns。
+2. 第 114-115 行调用 `sessionPersistence.turns(sessionId)` 得到持久化 turn 列表。
+3. 第 116 行创建从 0 到 turns.size 的 IntStream；第 117-121 行 Lambda 按索引读取 turn，构造 `InterviewTurnView(index, stage, question, candidateAnswer, evaluationSummary, score, createdAt)`，最后收集列表。
+4. 第 122 行用 `toView(session)` 和 indexedTurns 构造 `InterviewDetailView`；第 123 行结束。
 
-#### 3.3.2 `ownedSession`、`load` 与 `turns`
+#### 3.3.2 `ownedSession`、`load` 与所有权检查
 
-文件：`InterviewService.java:185-191`；`InterviewSessionPersistenceService.java:179-186`。
+**文件与行号：** `InterviewService.java:185-191`，`InterviewSessionPersistenceService.java:189-203`。
 
-1. ownedSession 第 186 行调用 persistence.load；第 187-189 行把 session.getUserId 与请求 owner 比较，越权抛 SESSION_ACCESS_DENIED；第 190 行返回。
-2. load 第 183-186 行调用 sessionRepository.findById，Optional 为空时抛 SESSION_NOT_FOUND。
-3. turns 第 179-181 行调用 `turnRepository.findBySessionIdOrderByCreatedAt(sessionId)`；该项目 Repository 声明按创建时间升序读取回合。
+1. `ownedSession` 调用 `sessionPersistence.load`，再比较 session.userId 与请求 userId；不一致抛 `SESSION_ACCESS_DENIED`。
+2. `load` 第 189 行声明函数；第 190 行调用 `InterviewSessionRepository.findById`；第 191 行把空 Optional 转为 `SESSION_NOT_FOUND`；第 192 行结束。
+3. `assertOwner` 第 199 行声明检查；第 200-202 行拒绝 null 或不等用户；第 203 行结束。它保证详情与 Python 进度接口共享同一授权规则。
+4. Repository 的 findById 是 MyBatis Mapper，对应 `resources/mapper/interview/InterviewSessionRepository.xml` 的按主键 select；不存在 JPA Repository。
 
-#### 3.3.3 `InterviewTurnEntity` getter
+#### 3.3.3 `turns`、Turn Mapper 与转换 Lambda
 
-文件：`java-backend/src/main/java/com/interviewguide/interview/domain/InterviewTurnEntity.java:54-63`。
+**文件与行号：** `InterviewSessionPersistenceService.java:185-187`，`InterviewTurnRepository.java:14`，`InterviewTurnRepository.xml:5`。
 
-1. getStage 第 54 行返回阶段；getSessionId 第 57 行返回所属会话。
-2. getQuestion 第 59 行返回被回答的问题；getCandidateAnswer 第 60 行返回候选人回答；getCreatedAt 第 61 行返回创建时间。
-3. getEvaluationSummary 第 62 行和 getScore 第 63 行返回 Java 保存的评价信息。各函数都是单句 return，无 Python、数据库或状态副作用。
+1. `turns` 第 185 行声明函数；第 186 行调用 Mapper 的 `findBySessionIdOrderByCreatedAt`；第 187 行结束。
+2. Mapper 接口第 14 行声明查询；XML 第 5 行以 `WHERE session_id=#{sessionId} ORDER BY created_at` 查询，保证第 116 行索引的顺序稳定。
+3. 详情函数的 map Lambda 第 117-121 行不访问数据库；它只是把实体字段变为对前端友好的不可变视图并显式附加序号。
 
 #### 3.3.4 `toView` 与 `parseFinalEvaluation`
 
-文件：`InterviewService.java:238-255`。
+**文件与行号：** `InterviewService.java:238-257`。
 
-1. toView 第 239 行先 parseFinalEvaluation；第 240-246 行以各 `InterviewSessionEntity` getter 构造 InterviewView。
-2. parseFinalEvaluation 第 250 行对 null/blank 返回 null；第 251 行 ObjectMapper 解析 JSON Map；第 252-254 行解析失败也返回 null，防止损坏报告阻塞详情读取。
-3. Session getter 位于 `InterviewSessionEntity.java:118-137`，每一行仅返回对应 id、配置、状态、题目、计数、时间或 JSON 字段。
+1. `toView` 第 238 行声明转换。第 239-247 行按构造器顺序复制会话身份、简历、方向、难度、题数、状态、Python/Java 状态版本、当前题、stage 和各类计数。
+2. 第 247 行调用 `parseFinalEvaluation`，第 248 行补充时间字段并返回。
+3. `parseFinalEvaluation` 第 249 行声明；第 250 行空 JSON 返回空 Map；第 251-252 行反序列化；第 253-255 行捕获异常也回退空 Map；第 257 行结束。可选报告 JSON 损坏不会阻止基本面试详情展示。
 
-#### 3.3.5 `ApiResult.success` 与 Python 边界
+## 4. 主流构建分析
 
-文件：`common/web/dto/ApiResult.java:3-6`。
+当前实现使用两个 MyBatis 查询和 Java 组装，优点是授权发生在读取 turns 前、SQL 简单且顺序稳定；缺点是会话与 turns 非同一快照读，回答提交并发时可能短暂看到新会话状态配旧 turn 列表。
 
-1. 第 4-5 行构造 code=200、message=success、data=InterviewDetailView 的 record。
-2. `detail` 的下游仅有 persistence.load、persistence.turns、toView；源码未出现 pythonAgentClient、HttpPythonAgentClient 或 `/v1/agent` 调用。
-3. 因此本接口的 Java→Python 调用次数为零；实时 Python 进度仅由另一个 `/agent-status` 接口读取。
+主流改进是为详情读采用只读事务（合适隔离级别）并返回强类型 DTO，或将 session/turns 用 MyBatis resultMap 的嵌套查询批量装配。优点是契约稳定、可更明确控制一致性；缺点是 resultMap 容易产生笛卡尔展开/复杂映射，事务会增加数据库资源占用。
 
-## 4. 审核结论
-
-1. 已覆盖前端恢复入口、请求封装、Java 身份校验、会话/回合查询和详情 DTO 构造。
-2. 每个可达项目函数均标注源码文件和行号，并按语句说明。
-3. 已确认接口只读 Java 历史数据，不会调用 Python。
+本项目适合先保留两查询方式，并在详情读取与提交回答并发问题出现时引入 `@Transactional(readOnly=true)` 和版本号回传。前端可基于 session.stateVersion 检测变化后刷新；数据库为 `interview_turns(session_id, created_at)` 保持复合索引。

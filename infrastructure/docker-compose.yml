@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-interview_agent}
       POSTGRES_USER: ${POSTGRES_USER:-interview}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
@@ -46,7 +46,7 @@ services:
     image: rabbitmq:3.13-management-alpine
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-interview}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD in .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-}
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 5s
@@ -57,11 +57,13 @@ services:
   python-agent:
     build:
       context: ../python-agent
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-interview}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-interview_agent}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-interview}:${POSTGRES_PASSWORD:-}@postgres:5432/${POSTGRES_DB:-interview_agent}
       MODEL_PROVIDER: ${MODEL_PROVIDER:-openai-compatible}
-      MODEL_NAME: ${MODEL_NAME:?set MODEL_NAME in .env}
-      MODEL_API_KEY: ${MODEL_API_KEY:?set MODEL_API_KEY in .env}
+      MODEL_NAME: ${MODEL_NAME:-}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
       MODEL_BASE_URL: ${MODEL_BASE_URL:-}
       MODEL_TEMPERATURE: ${MODEL_TEMPERATURE:-0.2}
       REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-120}
@@ -87,21 +89,23 @@ services:
   java-backend:
     build:
       context: ../java-backend
+      args:
+        MAVEN_MIRROR_URL: ${MAVEN_MIRROR_URL:-}
     environment:
       DATABASE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-interview_agent}
       DATABASE_USERNAME: ${POSTGRES_USER:-interview}
-      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-}
       REDIS_URL: redis://redis-java:6379
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_USER: ${RABBITMQ_USER:-interview}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-}
       PYTHON_AGENT_BASE_URL: http://python-agent:8000
       PYTHON_AGENT_READ_TIMEOUT: ${PYTHON_AGENT_READ_TIMEOUT:-11m}
       AGENT_RABBIT_RETRY_MAX_ATTEMPTS: ${AGENT_RABBIT_RETRY_MAX_ATTEMPTS:-2}
       AGENT_MAX_ATTEMPTS: ${AGENT_MAX_ATTEMPTS:-2}
       AGENT_FILE_STORAGE_ROOT: /app/data/files
       AGENT_PDF_FONT_PATH: /app/fonts/NotoSansCJKsc-Regular.otf
-      AGENT_SYSTEM_KNOWLEDGE_BASE_IDS: ${AGENT_SYSTEM_KNOWLEDGE_BASE_IDS:?set AGENT_SYSTEM_KNOWLEDGE_BASE_IDS in .env}
+      AGENT_SYSTEM_KNOWLEDGE_BASE_IDS: ${AGENT_SYSTEM_KNOWLEDGE_BASE_IDS:-}
     volumes:
       - java-files:/app/data
       - ./fonts:/app/fonts:ro
@@ -127,6 +131,8 @@ services:
   frontend:
     build:
       context: ../frontend
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
     depends_on:
       java-backend:
         condition: service_healthy

@@ -1,187 +1,107 @@
-# POST /api/knowledgebase/upload：上传知识库并异步向量索引的完整函数调用链
+# POST /api/knowledgebase/upload：上传知识库并异步向量化完整函数调用链逐行解析
+
+> 当前实现同步解析并保存文档，然后经 RabbitMQ 异步调用 Python RAG 索引。HTTP 成功只表示知识库已保存且索引消息已投递，不代表向量化完成。
 
 ## 1. 接口定义
 
-接口接收 multipart 文档和可选名称、分类、网页来源元数据。Java 同步解析文本、保存原始字节和数据库实体，并向 RabbitMQ 投递索引任务后返回；消费者异步调用 Python `/v1/agent/rag/index`。Python 分块、批量生成 embedding、替换该知识库的向量记录，Java 再把向量数量和 COMPLETED 状态写回。
+### 1.1 功能与作用
 
-| 项目 | 内容 |
+接口接收文件以及可选名称、分类、网页来源元数据，解析为文本，保存原始字节和知识库记录，随后创建 PENDING 索引任务并投递 RabbitMQ。消费端调用 Python `/v1/agent/rag/index`，将向量条数及状态回写 PostgreSQL/Java Redis。
+
+### 1.2 基本信息
+
+| 项目 | 当前实现 |
 | --- | --- |
-| 方法/路径 | POST `/api/knowledgebase/upload` |
-| 请求 | multipart/form-data；必填 file，其余可选 |
-| 同步返回 | knowledgeBase 基本字段；投递成功不等于向量已完成 |
-| Python | Rabbit 消费后 POST `/v1/agent/rag/index` |
-| 初始/过程状态 | PENDING → PROCESSING → COMPLETED 或 FAILED |
+| 路径 | `POST /api/knowledgebase/upload`，multipart/form-data |
+| Controller | `KnowledgeBaseController.upload`，`KnowledgeBaseController.java:35-56` |
+| 必需字段 | `file`；name/category/source* 为可选 |
+| Java 数据 | knowledge_bases（含原始 bytes、解析文本、来源和向量状态） |
+| 异步路径 | RabbitMQ agent.work → Python `POST /v1/agent/rag/index` |
+| Redis | Java 提交后缓存索引状态；Python 使用其专属 RAG 缓存/向量存储。|
+
+### 1.3 前端入口
+
+`knowledgeBaseApi.uploadKnowledgeBase` 位于 `frontend/src/api/knowledgebase.ts:77-89`，将文件和可选网页来源写为 FormData，调用通用 `request.upload`。
 
 ## 2. 函数调用链
 
-~~~text
-KnowledgeBaseUploadPage.handleUpload
- -> knowledgeBaseApi.uploadKnowledgeBase → request.upload → Axios 拦截器
- -> RequestIdFilter → SimpleRateLimitFilter → KnowledgeBaseController.upload
- -> KnowledgeBaseService.upload
-    -> UserIdentityResolver.require → isPlainTextDocument
-    -> persistDocument → BusinessIdGenerator.next
-       -> KnowledgeBaseEntity 构造/attachOriginalBytes/attachWebSource
-       -> Repository.save → KnowledgeBaseIndexWorker.index → RabbitTemplate.convertAndSend
-       -> KnowledgeBaseService.toView
- -> ApiResult.success（HTTP 返回）
-
-RabbitAgentWorkConsumer.consume
- -> KnowledgeBaseIndexWorker.process
-    -> Repository.findById/getOwnerId/hasDeletionRequest
-    -> Persistence.markIndexing
-    -> HttpPythonAgentClient.indexRag → AgentCallExecutor.execute → post/validateRequest
-    -> Python index_rag → _remember_request_context → _resolve_rag_service
-       -> RagService.index_document
-          -> TokenChunker.split → _lock_for
-          -> EmbeddingProvider.embed_documents（分批）
-          -> VectorRepository.replace_for_knowledge_base
-          -> invalidate_cache
-    -> Persistence.markIndexed 或 markIndexFailed
-~~~
+```text
+knowledgeBaseApi.uploadKnowledgeBase -> request.upload -> Axios interceptor
+  -> RequestIdFilter -> SimpleRateLimitFilter -> IdempotencyFilter（可选）
+  -> KnowledgeBaseController.upload -> Instant.parse（可选来源时间）
+  -> KnowledgeBaseService.upload -> UserIdentityResolver.require
+     -> isPlainTextDocument / Tika.parseToString -> persistDocument
+        -> BusinessIdGenerator.next -> KnowledgeBaseEntity / attachOriginalBytes / attachWebSource
+        -> KnowledgeBaseRepository.save (MyBatis)
+        -> KnowledgeBaseIndexWorker.index -> RabbitTemplate.convertAndSend
+     -> toView
+  -> RabbitAgentWorkConsumer.consume -> KnowledgeBaseIndexWorker.process
+     -> KnowledgeBasePersistenceService.markIndexing
+     -> HttpPythonAgentClient.indexRag -> AgentCallExecutor -> Python rag_index
+     -> markIndexed 或 markIndexFailed / retry
+  -> ApiResult.success
+```
 
 ## 3. 函数解析
 
-### 3.1 前端函数
+### 3.1 前端、过滤器与 Controller 函数
 
-#### 3.1.1 `KnowledgeBaseUploadPage.handleUpload`
+#### 3.1.1 `knowledgeBaseApi.uploadKnowledgeBase` 与 `request.upload`
 
-文件：`frontend/src/pages/KnowledgeBaseUploadPage.tsx:21-33`。
+**文件与行号：** `frontend/src/api/knowledgebase.ts:77-89`，`frontend/src/api/request.ts:47-72、173-178`。
 
-1. 第 21 行接收 File 和可选 name；第 22-23 行进入上传状态并清错误。
-2. 第 25-27 行 await uploadKnowledgeBase，成功后调用父组件 onUploadComplete。
-3. 第 28-31 行捕获错误、选择 Error.message/默认文案，并恢复 uploading=false；成功路径由父组件导航离开页面。
+1. 第 78 行创建 FormData；第 79 行写必需 file；第 80-81 行仅在非空时写 name/category。
+2. 第 82-87 行有网页来源时写 URL、标题、抓取时间、内容哈希；第 88 行调用 300 秒超时的 `request.upload`；第 89 行结束。
+3. `createClientId`/`currentUserId` 在 request.ts 第 47-57 行生成身份；拦截器第 64-72 行写头；`upload` 第 173-178 行 POST multipart、设置 timeout 并返回解包 data。
 
-#### 3.1.2 `knowledgeBaseApi.uploadKnowledgeBase`
+#### 3.1.2 RequestId、限流、幂等与 `KnowledgeBaseController.upload`
 
-文件：`frontend/src/api/knowledgebase.ts:77-89`。
+**文件与行号：** `RequestIdFilter.java:23-41`、`SimpleRateLimitFilter.java:48-82`、`IdempotencyFilter.java:41-96`，目录 `java-backend/src/main/java/com/interviewguide/infrastructure/`；`KnowledgeBaseController.java:35-56`。
 
-1. 第 77 行定义文件、名称、分类和可选网页来源参数；第 78 行创建 FormData。
-2. 第 79 行追加 file；第 80-81 行仅在有值时追加 name/category。
-3. 第 82-87 行有网页来源时逐项追加 URL、标题、抓取时间和 hash。
-4. 第 88 行调用 `request.upload('/api/knowledgebase/upload',formData)`；第 89 行结束。
+1. RequestId filter 规范/回传 ID、写 MDC；限流用 Redis 固定窗口、故障回退本机；POST 带幂等键才被 Idempotency filter 占位。
+2. Controller 第 35 行声明 multipart POST；第 36-44 行绑定文件、名称、分类、来源和用户头。
+3. 第 45 行初始化 fetchedAt；第 46-49 行仅对非空来源时间调用 `Instant.parse`，格式异常忽略，因来源信息可选。第 50-51 行委托 Service。
+4. 第 52-55 行构造只含基础信息的返回 Map：类别 null 转空串、内容长度取上传文件大小；第 56 行结束。
 
-#### 3.1.3 `request.upload` 与拦截器
+### 3.2 Java 解析、保存、投递函数
 
-文件：`frontend/src/api/request.ts:47-73、123-155、173-179`。
+#### 3.2.1 `KnowledgeBaseService.upload` 与 `uploadMarkdown`
 
-1. upload 第 173 行声明函数；第 174-178 行 POST FormData、设 300000ms 与 multipart Content-Type，并允许调用方覆盖配置；随后取 response.data。
-2. createClientId/currentUserId 第 47-58 行生成请求 ID、读取/保存 owner；请求拦截器第 64-73 行写 X-User-Id 和 X-Request-Id。
-3. 成功拦截器第 123-135 行解包 ApiResult；失败回调第 136-155 行将 Blob JSON、HTTP 或网络错误转为 ApiRequestError。
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/knowledgebase/service/KnowledgeBaseService.java:57-105`。
 
-### 3.2 Java 同步上传函数
+1. 四参数 upload 第 57-59 行是兼容委托，补齐 null 来源后调用主 overload。
+2. 主 upload 第 63 行 require owner；第 64-70 行拒绝空文件/文件名。第 71-82 行解析：`isPlainTextDocument` 判定文本/Markdown 时第 78 行 UTF-8 直接读取，否则第 79 行 Tika 解析；异常转 `KNOWLEDGE_BASE_PARSE_FAILED`。
+3. 第 83-85 行拒绝空文本；第 86 行决定显示名称；第 87 行取原字节；第 88-90 行调用 `persistDocument`。
+4. `uploadMarkdown` 第 93-105 行执行同等 owner、filename、markdown 校验，UTF-8 编码原文、设 text/markdown，然后调用同一持久化函数。
 
-#### 3.2.1 `KnowledgeBaseController.upload`
+#### 3.2.2 `persistDocument`、实体与 MyBatis 保存
 
-文件：`java-backend/src/main/java/com/interviewguide/knowledgebase/controller/KnowledgeBaseController.java:35-55`。
+**文件与行号：** `KnowledgeBaseService.java:108-130`。
 
-1. 第 35 行声明 POST /upload 与 multipart；第 36-44 行绑定 file、可选字段和用户头。
-2. 第 45 行 fetchedAt 初始 null；第 46-49 行非空时 Instant.parse，非法时间被忽略，因为来源可选。
-3. 第 50-51 行调用 service.upload；第 52-55 行以 view 和 file.getSize 构造成功 Map。
+1. 第 111 行 `idGenerator.next` 创建业务 ID。第 112-117 行构造实体，写 owner、名称、类别、原文件名、大小、类型和解析文本。
+2. 第 118 行调用实体 `attachOriginalBytes` 保存下载用二进制。第 119-121 行只有 sourceUrl 非空时调用 `attachWebSource`。
+3. 第 122 行 MyBatis `repository.save` 插入记录。第 123-128 行调用 index worker 投递；投递失败第 126 行持久化 FAILED 后重抛。第 129 行 `toView` 转换；第 130 行结束。
 
-#### 3.2.2 `KnowledgeBaseService.upload`
+#### 3.2.3 `KnowledgeBaseIndexWorker.index`、消费与 Python 索引
 
-文件：`KnowledgeBaseService.java:57-87`。
+**文件与行号：** `KnowledgeBaseIndexWorker.java:39-112`，`infrastructure/messaging/RabbitAgentWorkConsumer.java:22-39`。
 
-1. 第 59 行 identity.require；第 60-62 行拒绝 null/空文件。
-2. 第 63-66 行取原始文件名并拒绝空值。
-3. 第 67-78 行按 isPlainTextDocument 分支：文本/Markdown 直接 UTF-8 解码，二进制办公/PDF 交 Tika；异常转 KNOWLEDGE_BASE_PARSE_FAILED。
-4. 第 79-81 行拒绝空文本；第 82 行解析显示名；第 83 行读取原始 bytes。
-5. 第 84-86 行把所有字段交 persistDocument；第 87 行结束。
+1. `index` 第 40-42 行构造 KNOWLEDGE_BASE_INDEX 消息并 RabbitTemplate 发送。
+2. 消费者按任务类型转到 `process`。`process` 第 46-59 行读取记录、验证 owner、跳过删除中/已删文档；第 60-62 行 `markIndexing` 原子转状态，失败即返回。
+3. 第 64-68 行构造 `AgentRagIndexRequest`，带 runId、文本、知识库 ID、文件名；第 69-76 行非成功响应标记 FAILED，retryable 才抛给 Rabbit 重试。
+4. 第 78-94 行索引期间若被删除则调用 Python deleteRag 清理，否则 `markIndexed` 写向量条数。第 95-110 行捕获异常，非业务/临时 Python 异常才继续抛出以触发 MQ 重试。
 
-#### 3.2.3 `isPlainTextDocument` 与 `persistDocument`
+#### 3.2.4 Python RAG 索引和状态持久化
 
-文件：`KnowledgeBaseService.java:104-125、235-241`。
+**文件与行号：** `python-agent/app/api/application.py` 的 `/v1/agent/rag/index` 路由，`KnowledgeBasePersistenceService.java:24-101`。
 
-1. isPlainTextDocument 第 235-241 行把 filename/contentType 小写，匹配 `.txt/.md/.markdown` 或 text/plain、text/markdown。
-2. persistDocument 第 107 行生成 ID；第 108-113 行构造实体；第 114 行 attachOriginalBytes。
-3. 第 115-117 行来源 URL 非空时 strip 并 attachWebSource；第 118 行 repository.save。
-4. 第 119-123 行调用 indexWorker.index；投递异常时 markIndexFailed 并重抛。
-5. 第 125 行 toView 返回 PENDING 实体投影。
+1. Python 路由接收索引请求，调用 RAG service 将文本切块、嵌入并写 pgvector/索引；完成后回显成功 code 和切块数。
+2. `markIndexing`、`markIndexed`、`markIndexFailed` 在 PersistenceService 中事务更新 vectorStatus、计数/错误，并通过 `cacheAfterCommit` 在数据库提交后刷新 `JavaTaskStatusCache`；Redis 故障不改变数据库事实。
 
-#### 3.2.4 实体、ID 与 `toView`
+## 4. 主流构建分析
 
-文件：`KnowledgeBaseEntity.java:55-116`；`BusinessIdGenerator.java:13-16`；`KnowledgeBaseService.java:225-233`。
+当前“同步保存 + MQ 异步索引”适合大文件/模型索引，优点是上传不等待向量化、失败可持久化和重试；缺点是数据库保存与直接 MQ 发送有双写窗口，用户需轮询状态。
 
-1. BusinessIdGenerator.next 用 AtomicLong 取当前毫秒/旧值+1较大者并转 String。
-2. KnowledgeBaseEntity 构造保存 ID、owner、名称、分类、文件元数据、正文，初始化 vectorStatus=PENDING 和时间；attachOriginalBytes 第 112 行写 byte[]；attachWebSource 第 113-116 行写四个来源字段。
-3. toView 第 225-233 行逐个读取实体 ID、名称、分类、文件、内容类型/大小、vectorStatus/vectorCount/error、来源和时间，构造 KnowledgeBaseView。
+主流改进为 Transactional Outbox：同一事务写知识库与 outbox，独立发布器发送消息，消费者使用 Inbox 去重。优点是可靠投递和审计；缺点是新增表、CDC/轮询和运维复杂度。
 
-#### 3.2.5 `KnowledgeBaseIndexWorker.index`
-
-文件：`KnowledgeBaseIndexWorker.java:38-42`。
-
-1. 第 38 行接收知识库 ID/用户；第 39-41 行选择共享 exchange/routing key，构造 taskType=KNOWLEDGE_BASE_INDEX 的 AgentWorkTaskMessage并 convertAndSend；第 42 行结束。
-2. 此函数只投递 ID，不把正文塞进消息；浏览器在消息入队后即可收到 HTTP 成功。
-
-### 3.3 Rabbit 消费与 Java Worker
-
-#### 3.3.1 `RabbitAgentWorkConsumer.consume`
-
-文件：`infrastructure/messaging/RabbitAgentWorkConsumer.java:22-39`。
-
-1. 第 24-27 行拒绝 null 或缺 taskType/resourceId/userId 的消息。
-2. 第 29-35 行 switch；KNOWLEDGE_BASE_INDEX 分支调用 worker.process(resourceId,userId)。
-3. 第 36-38 行只捕获无法转数字的 resume 资源；知识库 ID 作为字符串直接使用。
-
-#### 3.3.2 `KnowledgeBaseIndexWorker.process`
-
-文件：`KnowledgeBaseIndexWorker.java:44-100`。
-
-1. 第 45-49 行查询实体；已删除 return。第 50-52 行 owner 不符抛访问异常；第 53-55 行有删除请求 return。
-2. 第 56-58 行 markIndexing 返回 false 时结束，避免重复/非法状态执行。
-3. 第 60-64 行构造 AgentRagIndexRequest，携带正文、唯一 KB ID、documentId、原始文件名和时间。
-4. 第 65-72 行处理非成功 Python 响应：markIndexFailed；只有 response.retryable 时抛 PythonAgentException 触发 Rabbit 重试。
-5. 第 74-84 行 Python 成功后重新查询；若上传后被删除，则调用 deleteRag 补偿清理晚到向量。
-6. 第 85 行把 response.answer 解析为 chunk 数并 markIndexed。
-7. 第 86-99 行异常时仅对仍存在且未删除实体 markIndexFailed；业务/不可重试网关错误被消费确认，其他异常重抛给 Rabbit。
-
-#### 3.3.3 `KnowledgeBasePersistenceService` 状态函数
-
-文件：`KnowledgeBasePersistenceService.java:18-38`。
-
-1. markIndexed 第 19-23 行 required 后把实体标 COMPLETED 与 count。
-2. markIndexing 第 29-32 行 required，调用实体 markIndexing 并返回是否成功进入 PROCESSING。
-3. markIndexFailed 第 34-38 行 required 后写 FAILED/error；每个修改函数均在事务中由 JPA dirty checking 提交。
-
-### 3.4 Java HTTP 到 Python RAG
-
-#### 3.4.1 `HttpPythonAgentClient.indexRag`、`post`、重试
-
-文件：`HttpPythonAgentClient.java:48、65-96`；`AgentCallExecutor.java:22-43`。
-
-1. indexRag 第 48 行用 callExecutor 执行固定 `/v1/agent/rag/index`。
-2. post 第 66 行 validateRequest；第 68-79 行发送、拒绝空 body、解析结构化错误或包装 HTTP/网络异常。
-3. validateRequest 第 89-95 行收集约束字段；execute 仅对可重试 PythonAgentException 按次数和 backoff 重试。
-
-#### 3.4.2 Python `index_rag` 与 `_resolve_rag_service`
-
-文件：`python-agent/app/api/application.py:223-238、331-337`。
-
-1. 路由第 225 行保存上下文；第 226-231 行构造 KnowledgeDocument 并 await RagService.index_document。
-2. 第 232-238 行构造 code=100 AgentResponse，answer 为 chunk count 字符串。
-3. _resolve_rag_service 第 332-337 行从 app.state 读取；为空时 build_rag_service 并缓存。
-
-#### 3.4.3 `RagService.index_document`、`_lock_for`、`invalidate_cache`
-
-文件：`python-agent/app/rag/service.py:35-54、128-136`。
-
-1. 第 36 行 TokenChunker.split；第 37 行按 knowledge_base_id 获取 asyncio.Lock，防止同一 KB 并发替换。
-2. 第 39-47 行按 policy.embedding_batch_size 分批 embed_documents，校验向量数量并赋给每个 chunk。
-3. 第 48 行 repository.replace_for_knowledge_base 原子替换；第 49-52 行非 RagDependencyError 统一包装为 RAG embedding 失败。
-4. 第 53 行 invalidate_cache 清搜索缓存；第 54 行返回 chunk 数。
-5. _lock_for 第 131-136 行从字典取锁，不存在则创建/缓存并返回。
-
-#### 3.4.4 `TokenChunker.split`、Embedding 与向量仓储
-
-文件：`rag/parser.py:54-80`；`rag/embedding.py:41-47`；`rag/repository.py:47-78`。
-
-1. TokenChunker.split 按 token 近似切正文，使用 chunk_size/overlap 生成带序号、内容和 metadata 的 KnowledgeChunk，并拒绝空结果。
-2. embed_documents 第 41-47 行无 retry executor 时直接 await 客户端，有执行器时把 aembed_documents 包为异步 operation 交重试器。
-3. PostgresVectorRepository.replace_for_knowledge_base 先删除该 KB 旧 chunks，再批量 add 新实体并 commit；失败时事务回滚，避免旧新版本混杂。
-
-## 4. 审核结论
-
-1. 已覆盖同步上传与异步索引两个真实阶段，并明确 HTTP 成功不代表 Python 向量完成。
-2. 已覆盖前端、Java 解析/持久化、Rabbit 消费、Java-Python HTTP、Python 分块/embedding/向量替换及状态写回。
-3. 每个可达项目函数均标注文件和行号，删除竞态和失败重试分支亦已写入。
+本项目已具备任务状态和 afterCommit Redis 刷新，适合在索引量上升时引入 Outbox。实现时让 `persistDocument` 写 outbox 而不直接 `index`，为消息加 ID，消费者记录 processed ID，保持删除竞态检查和 PostgreSQL 最终事实来源。

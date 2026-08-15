@@ -1,208 +1,157 @@
-# GET /api/resumes/{id}/export：导出简历分析 PDF 完整函数调用链
+# GET /api/resumes/{id}/export：导出简历分析 PDF 完整函数调用链逐行解析
 
-> 本文对应 Java 接口清单第 4 个接口。源码结论：请求只在 Java 后端完成授权、分析投影和 PDFBox 渲染，不调用 RabbitMQ、PythonAgentClient 或 Python Agent。
+> 本文以当前实现为准。导出是 Java 同步生成 PDF 的只读操作；它不会向 RabbitMQ 投递消息，也不调用 Python。分析结果只从 Java Redis 快照或 PostgreSQL 读取。
 
 ## 1. 接口定义
 
-### 1.1 功能和作用
+### 1.1 功能与作用
 
-该接口读取当前用户拥有的指定简历及其最近一次分析结果，把简历正文、评分、摘要、优势和建议拼接为文本，使用配置的 CJK 字体生成 PDF 二进制并作为下载响应返回。它不会重新分析简历，也不会调用 Python。
+该接口将当前用户的一份简历正文与最新分析结果组合为 PDF 字节流，并以附件响应下载。若尚无分析，PDF 仍包含简历文本；若服务器没有配置可读取的 CJK 字体文件，接口明确返回 `RESUME_PDF_FONT_REQUIRED`，避免中文文字生成乱码或丢字。
 
 ### 1.2 基本信息
 
-| 项目 | 内容 |
+| 项目 | 当前实现 |
 | --- | --- |
-| HTTP 方法 | GET |
-| 路径 | /api/resumes/{id}/export |
-| 路径变量 | id，String 类型简历主键 |
-| Controller | ResumeController.export |
-| Service | ResumeService.export |
-| 响应类型 | ResponseEntity<byte[]> |
-| Content-Type | application/pdf |
-| 下载文件名 | resume-{id}.pdf |
-| Python 调用 | 无 |
+| 方法与路径 | `GET /api/resumes/{id}/export` |
+| Controller | `ResumeController.export`，`java-backend/src/main/java/com/interviewguide/resume/controller/ResumeController.java:51-55` |
+| 输入 | 路径 `id`、请求头 `X-User-Id` |
+| 成功响应 | `ResponseEntity<byte[]>`，`application/pdf`，`Content-Disposition: attachment` |
+| 数据 | resumes、candidates、最新 resume_analyses；字体路径来自 `agent.pdf-font-path` |
+| 异步边界 | 不调用 Python、不发 RabbitMQ；只读取已生成的分析结果。|
 
 ### 1.3 前端入口
 
-ResumeDetailPage.handleExportAnalysisPdf 在点击“导出分析报告”后调用 historyApi.exportAnalysisPdf。前端以 responseType=blob 和 skipResultTransform=true 请求二进制，收到 Blob 后创建临时 URL，触发浏览器下载，再释放 URL。
+`frontend/src/pages/ResumeDetailPage.tsx:112-129` 的 `handleExportAnalysisPdf` 由分析面板的导出按钮触发。它调用 `historyApi.exportAnalysisPdf`，然后把 Blob 转为临时 URL 并模拟下载。
 
 ## 2. 函数调用链
 
-~~~text
+```text
 ResumeDetailPage.handleExportAnalysisPdf
- -> historyApi.exportAnalysisPdf
- -> request.getInstance
- -> Axios instance.get（responseType=blob）
- -> Axios request interceptor
-    -> currentUserId -> createClientId
- -> GET /api/resumes/{id}/export
- -> RequestIdFilter.doFilterInternal -> normalize
- -> SimpleRateLimitFilter.doFilterInternal
- -> ResumeController.export
- -> ResumeService.export
-    -> ResumeService.owned
-       -> ResumeRepository.findById
-       -> UserIdentityResolver.require
-       -> ResumeService.owns
-          -> CandidateRepository.findById
-          -> CandidateEntity.getUserId
-    -> ResumeAnalysisService.latest
-       -> ResumeAnalysisPersistenceService.latest
-       -> ResumeAnalysisRepository.findFirstByResumeIdOrderByCreatedAtDesc
-       -> ResumeAnalysisService.toView
-          -> ResumeAnalysisEntity getter
-          -> stringList -> ObjectMapper.readValue 或 List.of
-          -> mapList -> ObjectMapper.readValue 或 List.of
-    -> ResumeEntity.getContent
-    -> Files.isRegularFile
-    -> PDDocument 构造
-    -> PDType0Font.load
-    -> ResumeService.addTextPages
-       -> split / substring / PDPage / PDPageContentStream
-    -> PDDocument.save
-    -> ResponseEntity.ok/contentType/header/body
- -> 浏览器接收 byte[]，创建 Blob URL 并下载
-~~~
-
-链路在 Java 返回 ResponseEntity<byte[]> 后结束。若字体、PDFBox、数据库或授权失败，异常由 ApiExceptionHandler 处理；不存在 Python /v1 请求。
+  -> historyApi.exportAnalysisPdf
+  -> request.getInstance().get（blob，跳过统一结果解包）
+  -> Axios 请求拦截器 -> currentUserId / createClientId
+  -> RequestIdFilter.doFilterInternal -> normalize
+  -> SimpleRateLimitFilter.doFilterInternal -> JavaRedisStore.incrementInFixedWindow
+     ->（Redis 故障）ConcurrentHashMap 回退
+  -> IdempotencyFilter.shouldNotFilter（GET，跳过）
+  -> ResumeController.export
+  -> ResumeService.export
+     -> ResumeService.owned -> ResumeRepository.findById -> ResumeService.owns
+        -> UserIdentityResolver.require -> CandidateRepository.findById
+     -> ResumeAnalysisService.latest
+        -> JavaTaskStatusCache.latestResumeAnalysis / JavaRedisStore.getJson
+        ->（未命中）ResumeAnalysisPersistenceService.latest -> ResumeAnalysisRepository XML
+        -> toCachedView 或 toView -> JSON 列表转换函数
+     -> ResumeService.addTextPages
+  -> PDF byte[] 响应 -> 前端 Blob URL 下载与 finally
+```
 
 ## 3. 函数解析
 
 ### 3.1 前端函数
 
-#### 3.1.1 ResumeDetailPage.handleExportAnalysisPdf
+#### 3.1.1 `ResumeDetailPage.handleExportAnalysisPdf`
 
-文件：frontend/src/pages/ResumeDetailPage.tsx:114-131。
+**文件与行号：** `frontend/src/pages/ResumeDetailPage.tsx:112-129`。
 
-1. 第114行定义异步导出函数。
-2. 第115行 setExporting('analysis')，显示导出中的状态。
-3. 第117行 await historyApi.exportAnalysisPdf(resumeId)，等待 Blob。
-4. 第118行 createObjectURL 把 Blob 映射为临时 URL。
-5. 第119-121行创建 a、设置 href 和 download 文件名（优先 filename，否则 resumeId）。
-6. 第122-125行插入 body、click 触发下载、移除元素并 revokeObjectURL。
-7. 第126-127行捕获错误并 alert；第128-130行 finally 清空 exporting。
+1. 第 112 行声明异步导出处理函数。第 113 行把 `exporting` 置为 `analysis`，使界面可禁用重复点击。
+2. 第 114 行进入 `try`；第 115 行调用 `historyApi.exportAnalysisPdf(resumeId)` 并等待 PDF Blob。
+3. 第 116 行用 `URL.createObjectURL` 创建浏览器临时地址；第 117 行创建 `<a>` 元素；第 118 行赋值 href；第 119 行以当前文件名或简历 ID 组成下载文件名。
+4. 第 120 行临时插入 DOM；第 121 行触发点击；第 122 行立即移除元素；第 123 行调用 `revokeObjectURL` 释放浏览器内存。
+5. 第 124-125 行捕获任意请求或浏览器下载异常并提示用户。第 126-128 行在 finally 中清空 `exporting`；第 129 行结束。
 
-#### 3.1.2 historyApi.exportAnalysisPdf
+#### 3.1.2 `historyApi.exportAnalysisPdf`
 
-文件：frontend/src/api/history.ts:88-91。
+**文件与行号：** `frontend/src/api/history.ts:88-91`。
 
-1. 第88行定义异步函数，参数 resumeId，返回 Blob。
-2. 第89行调用 request.getInstance().get，路径为 /api/resumes/{id}/export；responseType='blob' 防止 PDF 按 JSON 解码，skipResultTransform=true 保留二进制。
-3. 第90行返回 response.data；第91行结束。
+1. 第 88 行声明异步函数与 Blob 返回类型。第 89 行通过 `request.getInstance()` 取得底层 Axios 实例，并请求 `/api/resumes/${resumeId}/export`。
+2. 同行设置 `responseType: 'blob'`，防止 Axios 按 JSON 解析 PDF；`skipResultTransform: true` 是类型传递给配置的标志，实际成功拦截器看到 Blob 不含 `code` 后会在 `request.ts:134` 原样返回。
+3. 第 90 行返回 `response.data` Blob；第 91 行结束。
 
-#### 3.1.3 request.getInstance、createClientId、currentUserId 与拦截器
+#### 3.1.3 请求身份和响应错误函数
 
-文件：frontend/src/api/request.ts:47-73、180-182。
+**文件与行号：** `frontend/src/api/request.ts:47-57、64-72、123-154`。
 
-1. getInstance 第180-182行返回共享 Axios instance。
-2. createClientId 第47-50行优先 crypto.randomUUID，不支持时拼接 prefix、时间和随机十六进制值。
-3. currentUserId 第52-58行读取 localStorage；缺失时生成、保存并返回用户 ID。
-4. 请求拦截器第64-69行确保 headers 并定义兼容 AxiosHeaders 的 setHeader；第70-71行写 X-User-Id 和 X-Request-Id；第72行返回 config。
+1. `createClientId` 第 47-49 行用安全 UUID 或旧环境回退生成客户端 ID；`currentUserId` 第 52-57 行读取或首次写入 localStorage。
+2. 请求拦截器第 64-72 行初始化 headers、兼容 AxiosHeaders/普通对象、写入 `X-User-Id` 和每请求的 `X-Request-Id` 后返回配置。
+3. 成功拦截器第 125 行读取 Blob；第 126 行因其没有 `code`，第 134 行原样返回。因此 PDF 不会被错误地当成 `ApiResult` 解包。
+4. 失败拦截器第 136-154 行先确认 Axios 错误，再在第 140 行尝试从 Blob 解码错误 JSON；第 141-153 行转换统一错误或 HTTP 错误，保留响应 requestId。
 
-#### 3.1.4 二进制响应和错误函数
+### 3.2 Java 过滤与入口函数
 
-文件：frontend/src/api/request.ts:75-155。
+#### 3.2.1 `RequestIdFilter.doFilterInternal` 与 `normalize`
 
-1. 成功拦截器第124-134行读取 response；PDF 是 Blob，不满足 isRecord(result) 且有 code 的 JSON 条件，因此第134行原样返回。
-2. isRecord 第75-77行拒绝 null、数组和非对象；stringValue 第79-81行只返回非空字符串。
-3. parseApiError 第83-99行提取嵌套 error/code 并构造 ApiRequestError。
-4. 失败拦截器第136-153行处理 AxiosError；无 response 调 transportError，有 response 调 decodeErrorData 和 parseApiError。导出失败回到 handleExportAnalysisPdf 的 catch。
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/infrastructure/web/RequestIdFilter.java:23-41`。
 
-### 3.2 Java Web 入口
+1. 第 25 行读取并规范 request ID；第 26 行存 request attribute；第 27 行回写响应头；第 28 行加入 MDC。
+2. 第 29-30 行放行链路；第 31-33 行 finally 清理 MDC。`normalize` 第 36-41 行保留合法且不超过 128 位的值，否则创建 UUID。
 
-#### 3.2.1 RequestIdFilter.doFilterInternal 与 normalize
+#### 3.2.2 `SimpleRateLimitFilter.doFilterInternal` 与 `JavaRedisStore.incrementInFixedWindow`
 
-文件：java-backend/src/main/java/com/interviewguide/infrastructure/web/RequestIdFilter.java:23-41。
+**文件与行号：** `SimpleRateLimitFilter.java:48-82`，`JavaRedisStore.java:31-39`，均位于 `java-backend/src/main/java/com/interviewguide/infrastructure/`。
 
-1. 第25行读取 X-Request-Id 并调用 normalize。
-2. normalize 第36-41行仅接受非空、长度不超过128且匹配正则的值；合法值第38行返回，非法值第40行生成 UUID。
-3. 第26-28行把 ID 写入 request attribute、响应头和 MDC；第30行继续 filterChain；第31-33行 finally 清理 MDC。
+1. 过滤器第 50-58 行跳过健康探针、按 IP/URI/分钟构造 Redis 限流键。
+2. `incrementInFixedWindow` 第 32-35 行原子递增并首次设 65 秒 TTL；第 36-38 行 Redis 异常时返回空 Optional。
+3. 过滤器第 60-67 行采用分布式计数或 `ConcurrentHashMap` 本机回退；第 69-79 行超限响应 429；第 81 行放行未超限请求。
 
-#### 3.2.2 SimpleRateLimitFilter.doFilterInternal
+#### 3.2.3 `IdempotencyFilter.shouldNotFilter`
 
-文件：java-backend/src/main/java/com/interviewguide/infrastructure/ratelimit/SimpleRateLimitFilter.java:38-61。
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/infrastructure/idempotency/IdempotencyFilter.java:41-44`。
 
-1. 第40-43行只放行 health/actuator，export 路径继续限流。
-2. 第44-47行按远端地址、URI 和当前分钟计算 Window。
-3. 第48行原子计数并比较 limit；超限第49-58行返回429和结构化错误，正常第60行继续。
+1. 第 42-44 行规定仅带幂等键的写请求需要处理。当前为 GET，所以函数决定跳过，既不占用 Redis 幂等键也不调用 `doFilterInternal`。
 
-#### 3.2.3 ResumeController.export 与 ResponseEntity
+#### 3.2.4 `ResumeController.export`
 
-文件：java-backend/src/main/java/com/interviewguide/resume/controller/ResumeController.java:51-55。
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/resume/controller/ResumeController.java:51-55`。
 
-1. 第51行映射与类级路径组成 /api/resumes/{id}/export。
-2. 第52行绑定 id 并声明 ResponseEntity<byte[]>。
-3. 第53行读取 X-User-Id；第54行调用 resumeService.export；第55行结束。
-4. Controller 不生成 PDF，ResponseEntity.ok/contentType/header/body 是 Spring 函数，项目传入 PDF MIME、附件名和 byte[]。
+1. 第 51 行映射 `/{id}/export`。第 52 行绑定路径 ID；第 53 行绑定可选用户头。
+2. 第 54 行将两者原样委托给 `resumeService.export`；第 55 行结束。该接口返回二进制 `ResponseEntity`，不使用 `ApiResult.success`。
 
-### 3.3 ResumeService.export
+### 3.3 Java 授权、分析读取和 PDF 构建函数
 
-文件：java-backend/src/main/java/com/interviewguide/resume/service/ResumeService.java:178-202。
+#### 3.3.1 `ResumeService.export`
 
-1. 第178-179行声明导出函数。
-2. 第180行调用 owned 完成存在性和归属校验。
-3. 第181行调用 analysisService.latest 获取最近分析。
-4. 第182行创建 StringBuilder，追加标题、换行和 resume.getContent；正文 null 转为空串。
-5. 第183-187行在 analysis 非 null 时追加标题、overallScore、summary、String.join 优势和建议。
-6. 第189-190行检查 pdfFontPath 非 null 且 Files.isRegularFile；失败抛 RESUME_PDF_FONT_REQUIRED。
-7. 第192行 try-with-resources 创建 PDDocument 与 ByteArrayOutputStream。
-8. 第193行 PDType0Font.load 加载 CJK 字体；第194行调用 addTextPages；第195行 document.save 写入内存流。
-9. 第196-198行构造200、application/pdf、Content-Disposition和 byte[] 响应。
-10. 第199-201行把 IOException 转成 RESUME_PDF_EXPORT_FAILED；第202行结束。
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeService.java:178-202`。
 
-#### 3.3.1 owned、owns、require 与 Repository
+1. 第 178-180 行声明函数并通过 `owned` 读取且授权简历。第 181 行调用 `analysisService.latest(id)`，它只读取最新快照/记录。
+2. 第 182 行创建内容缓冲并追加简历文本，空文本按空字符串处理。第 183 行仅在存在分析时追加分析段。
+3. 第 184-187 行依次追加总分、摘要、优点和建议；字符串列表用分号连接。第 189-191 行检查注入的 `pdfFontPath` 不为空且是可读普通文件，不满足即抛出明确配置错误。
+4. 第 192 行创建可自动关闭的 PDF 文档和字节输出流。第 193 行加载 CJK 字体；第 194 行调用项目函数 `addTextPages`；第 195 行把 PDF 写入输出流。
+5. 第 196-198 行创建 HTTP 200，设置 `application/pdf`、附件文件名并写入字节数组。第 199-201 行将任何 IOException 转换为 `RESUME_PDF_EXPORT_FAILED`；第 202 行结束。
 
-文件：ResumeService.java:276-288；java-backend/src/main/java/com/interviewguide/common/security/UserIdentityResolver.java:14-19；java-backend/src/main/java/com/interviewguide/resume/mapper/ResumeRepository.java:8-12。
+#### 3.3.2 `ResumeService.owned`、`owns` 与 Mapper 查询
 
-1. owned 第277行 findById；第278行不存在抛 RESUME_NOT_FOUND；第279行 require 后调用 owns；第280行不归属抛 RESUME_ACCESS_DENIED；第282行返回实体。
-2. owns 第286行取 candidateId 查询 CandidateRepository.findById；第287行比较 candidate.userId，候选人缺失时 orElse(false)；第288行结束。
-3. require 第15-17行拒绝 null/blank；第18行 strip；第19行返回规范化 ID。
-4. ResumeRepository.findById 与 CandidateRepository.findById 是 JpaRepository 继承的只读主键查询；导出链不调用 save/delete。
+**文件与行号：** `ResumeService.java:276-288`，`ResumeRepository.java:13`，`CandidateRepository.java:11`，均位于 `java-backend/src/main/java/com/interviewguide/`。
 
-### 3.4 最近分析投影
+1. `owned` 第 277 行按 ID 调用 `ResumeRepository.findById`，第 278 行将空结果转换为 `RESUME_NOT_FOUND`。
+2. 第 279 行调用 `UserIdentityResolver.require` 后再调用 `owns`；第 280 行拒绝非所有者；第 282 行返回实体。
+3. `require` 位于 `common/security/UserIdentityResolver.java:14-19`：第 15-17 行拒绝空身份，第 18 行去首尾空白，第 19 行返回 owner。
+4. `owns` 第 286 行调用 `CandidateRepository.findById`，第 287 行比较候选人的 userId。两个 Mapper 分别由 `mapper/resume/ResumeRepository.xml` 与 `CandidateRepository.xml` 的按主键 `<select>` 实现；它们是 MyBatis，不是 JPA。
 
-#### 3.4.1 latest 与 Persistence.latest
+#### 3.3.3 `ResumeAnalysisService.latest` 与转换函数
 
-文件：java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisService.java:62-65；java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisPersistenceService.java:50-52；java-backend/src/main/java/com/interviewguide/resume/mapper/ResumeAnalysisRepository.java:10-14。
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisService.java:67-74、91-137`。
 
-1. latest 第62行声明；第63行 persistence.latest；第64行无记录返回 null，有记录 toView；第65行结束。
-2. Persistence.latest 第50行声明；第51行按 resumeId 和 createdAt 倒序查询第一条并 orElse(null)；第52行结束。
-3. Repository 第12行的派生查询实现“按简历过滤、按创建时间倒序取第一条”。
+1. 第 70 行调用 `JavaTaskStatusCache.latestResumeAnalysis`，后者读取 `java:task:resume-analysis:latest:<resumeId>`；底层 `JavaRedisStore.getJson` 发生 Redis/JSON 异常时返回空 Optional。
+2. 第 71 行缓存命中时调用 `toCachedView`；第 72 行未命中时调用 `ResumeAnalysisPersistenceService.latest`；第 73 行无数据库记录返回 null，有记录转 `toView`。
+3. `toCachedView` 第 99-109 行从 Map 读取字段，分别调用第 111-125 行的 `number`、`integerOrNull`、`string`、`nullableString`、`parseInstant` 做安全类型回退，并调用 JSON 列表函数。
+4. `toView` 第 91-97 行从实体复制字段。`stringList` 第 127-131 行和 `mapList` 第 133-137 行对空/错误 JSON 返回空集合，确保历史脏数据不会阻断导出。
+5. `ResumeAnalysisPersistenceService.latest` 在 `ResumeAnalysisPersistenceService.java:60-62` 调用 `ResumeAnalysisRepository.findFirstByResumeIdOrderByCreatedAtDesc`；XML `mapper/resume/ResumeAnalysisRepository.xml:6` 以创建时间倒序取一条。
 
-#### 3.4.2 toView、stringList、mapList
+#### 3.3.4 `ResumeService.addTextPages`
 
-文件：java-backend/src/main/java/com/interviewguide/resume/service/ResumeAnalysisService.java:82-100。
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/resume/service/ResumeService.java:204-224`。
 
-1. toView 第83-85行读取 ID、状态、六项评分、summary、updatedAt；第86行两次调用 stringList；第87行调用 mapList、读取 error并构造 DTO。
-2. stringList 第90-94行：第91行 null/blank 返回 List.of；第92行 ObjectMapper.readValue 解析 List<String>；第93行异常返回空列表。
-3. mapList 第96-100行：第97行空值短路；第98行解析 List<Map<String,Object>>；第99行异常返回空列表。
-4. ResumeAnalysisEntity getter（java-backend/src/main/java/com/interviewguide/resume/domain/ResumeAnalysisEntity.java:111-129）逐行返回分析字段；ResumeAnalysisView record（dto/ResumeAnalysisView.java:7-21）生成 overallScore、summary、strengths、suggestions 等访问器，export 第184-187行使用它们。
+1. 第 205 行创建行列表。第 206 行按所有换行符切分原文且保留空行。
+2. 第 207 行取得当前源行；第 208 行在长度超过 55 时循环切出前 55 个字符并保留剩余部分；第 209 行写入最后一段。因此这是按字符数、不是按字体宽度的换行规则。
+3. 第 211-213 行初始化当前页、内容流和页内行数。第 214 行遍历每个文本行。
+4. 第 215 行在尚无页面或已达 48 行时新开页。第 216 行先结束并关闭旧流；第 217 行创建并加入 PDF 页；第 218 行创建新内容流；第 219 行开始文字、设置字体/字号/行距/起点并复位计数。
+5. 第 221 行把 Tab 替换为空格、写入文本、换行并递增计数。第 223 行在存在流时结束文字和关闭流；第 224 行结束函数。
 
-### 3.5 ResumeService.addTextPages
+## 4. 主流构建分析
 
-文件：java-backend/src/main/java/com/interviewguide/resume/service/ResumeService.java:204-224。
+当前方式在请求线程中用 PDFBox 生成整份 PDF。优点是无需额外服务、简单可靠、下载内容与当前 Java 查询结果一致；缺点是长简历和高并发导出会占用 Web 线程与内存，而且固定“55 字符/48 行”的排版不考虑真实字宽。
 
-1. 第204行声明输入 document、font、text，可抛 IOException。
-2. 第205-209行创建 lines，按换行 split；每个 source 超过55字符时循环 substring 切分，再加入剩余行。
-3. 第211-213行初始化 page、stream、lineCount。
-4. 第214-220行遍历 lines；无流或行数达到48时关闭旧流、创建 PDPage 和 PDPageContentStream，beginText，设置字体10、行距14和起点(40,750)。
-5. 第221行把制表符换成两个空格，showText 写入、newLine 换行并递增计数。
-6. 第223行关闭最后一个流；第224行结束。该函数只排版，不访问数据库或 Python。
+主流方案是在导出规模增长时使用异步导出任务：把导出请求写入任务表或消息队列，工作进程生成 PDF 到对象存储，前端轮询任务状态并获取短期签名下载链接。优点是不会阻塞 HTTP 线程、可以重试与审计、适合大文件；缺点是新增任务状态、对象存储、清理策略和最终一致性。
 
-### 3.6 异常边界
-
-文件：java-backend/src/main/java/com/interviewguide/common/web/ApiExceptionHandler.java:31-35、86-92、115-140。
-
-1. handleBusiness 第32-35行保留业务 code、HTTP status、retryable 和 requestId，字体缺失会走这里。
-2. handleDataAccess 第87-92行记录数据库异常并返回503。
-3. handleUnexpected 第116-120行记录未预期异常并返回500。
-4. response 第123-129行构造 ApiErrorDetail 和 ResponseEntity；requestId 第131-136行优先读过滤器 attribute，再读请求头或生成 UUID；firstNonBlank 第138-140行选择非空值。
-
-## 4. 审核结论
-
-1. 接口定义写明路径、变量、PDF 响应、授权和 Python 边界。
-2. 调用链覆盖前端 Blob、请求 ID、限流、Controller、授权、分析投影、PDF 排版和二进制响应。
-3. 每个本接口实际可达的项目函数均标出文件和行号，并逐项解释语句与失败分支。
-4. ResumeController.java:51-55 与 ResumeService.java:178-224 证明该接口本地生成 PDF，没有 Python /v1 调用。
-5. 本文审核通过后，下一接口按顺序为 GET /api/resumes/{id}/download。
-
+本项目当前导出量较小时适合保留同步实现；若引入异步方案，应复用现有 RabbitMQ 可靠性模式：创建 `resume_export_tasks` 表并在事务内记录任务，消费者调用独立导出服务/Worker，文件写入 MinIO 或 S3，任务完成后写下载键。无论同步或异步，都应继续在部署环境配置真实的 `agent.pdf-font-path`，并用支持 CJK 的字体及真实宽度测量替代固定字符切分。

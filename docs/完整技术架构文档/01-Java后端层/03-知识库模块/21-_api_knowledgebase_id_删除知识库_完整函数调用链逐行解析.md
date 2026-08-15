@@ -1,120 +1,92 @@
-# DELETE /api/knowledgebase/{id}：删除知识库及向量的完整函数调用链
+# DELETE /api/knowledgebase/{id}：删除知识库完整函数调用链逐行解析
+
+> 删除流程先将数据库记录标记为 DELETING，再同步调用 Python 删除向量；只有 Python 成功后才物理删除数据库记录与 Java Redis 索引快照。Python 失败会保留记录并标记 DELETE_FAILED，支持用户识别和后续处理。
 
 ## 1. 接口定义
 
-接口删除当前用户的一条知识库及 Python 向量数据。Java 先把状态写为 DELETING，再同步调用 Python `/v1/agent/rag/delete`；仅 Python 成功后删除 Java 实体。失败时保留实体并写 DELETE_FAILED/error，便于重试和诊断。
+### 1.1 功能与作用
 
-| 项目 | 内容 |
+`DELETE /api/knowledgebase/{id}` 删除当前用户知识库及其 Python RAG 向量。该接口不会发 RabbitMQ；为了在向量删除失败时不遗失重试上下文，它采用“先标记、再远程删除、最后物理删除”的同步补偿流程。
+
+### 1.2 基本信息
+
+| 项目 | 当前实现 |
 | --- | --- |
-| 方法/路径 | DELETE `/api/knowledgebase/{id}` |
-| Java 入口 | `KnowledgeBaseController.delete` |
-| Python | POST `/v1/agent/rag/delete` |
-| 成功 | 向量删除后删除 Java 记录 |
-| 失败 | Java 记录保留为 DELETE_FAILED |
+| 路径 | `DELETE /api/knowledgebase/{id}` |
+| Controller | `KnowledgeBaseController.delete`，`KnowledgeBaseController.java:76-81` |
+| Python | `POST /v1/agent/rag/delete` |
+| 状态 | DELETING → 删除成功物理移除；失败 → DELETE_FAILED |
+| Redis | 每次状态变更在数据库提交后刷新；物理删后提交后移除键。|
+
+### 1.3 前端入口
+
+管理页调用 `knowledgeBaseApi.deleteKnowledgeBase`，定义于 `frontend/src/api/knowledgebase.ts:129-131`，它使用 `request.delete`。
 
 ## 2. 函数调用链
 
-~~~text
-KnowledgeBaseManagePage.handleDelete → knowledgeBaseApi.deleteKnowledgeBase → request.delete
- -> Axios/Filter → KnowledgeBaseController.delete
- -> KnowledgeBaseService.delete → required → UserIdentityResolver.require
-    -> Persistence.markDeleting → Entity.markDeleting
-    -> HttpPythonAgentClient.deleteRag → AgentCallExecutor.execute → post
-    -> Python delete_rag → _resolve_rag_service
-       -> RagService.delete_knowledge_base → _lock_for
-       -> VectorRepository.delete_by_knowledge_base → invalidate_cache
-    -> [成功] Persistence.deleteMarked → Repository.delete
-    -> [失败] Persistence.markDeleteFailed → Entity.markDeleteFailed
- -> ApiResult.success → 前端刷新
-~~~
+```text
+knowledgeBaseApi.deleteKnowledgeBase -> request.delete -> Axios interceptor
+  -> RequestIdFilter -> SimpleRateLimitFilter -> IdempotencyFilter(optional)
+  -> KnowledgeBaseController.delete -> KnowledgeBaseService.delete
+     -> required -> KnowledgeBaseRepository.findById -> UserIdentityResolver.require
+     -> KnowledgeBasePersistenceService.markDeleting -> cacheAfterCommit
+     -> HttpPythonAgentClient.deleteRag -> AgentCallExecutor -> Python rag_delete
+     ->（失败）markDeleteFailed -> cacheAfterCommit -> BusinessException
+     ->（成功）KnowledgeBasePersistenceService.deleteMarked
+        -> Repository.delete -> afterCommit(removeKnowledgeBaseIndex)
+  -> ApiResult.success(null)
+```
 
 ## 3. 函数解析
 
-### 3.1 前端函数
+### 3.1 前端、过滤器和 Controller
 
-#### 3.1.1 `KnowledgeBaseManagePage.handleDelete`
+#### 3.1.1 `deleteKnowledgeBase`、请求和过滤器
 
-文件：`frontend/src/pages/KnowledgeBaseManagePage.tsx:216-228`。
+**文件与行号：** `frontend/src/api/knowledgebase.ts:129-131`，`frontend/src/api/request.ts:47-72、123-154`。
 
-1. 第 217 行无 deleteItem 直接 return；第 218 行设置 deleting=true。
-2. 第 220 行 await deleteKnowledgeBase(id)；第 221 行成功后 await loadData 刷新服务端状态；第 222 行关闭确认框。
-3. 第 223-225 行捕获错误并写 error；第 226-227 行 finally 恢复 deleting；第 228 行结束。
+1. API 第 129 行声明删除函数；第 130 行拼接 ID 并调用 request.delete；第 131 行结束。
+2. request.ts 生成/读取客户端用户 ID、写用户/追踪头；成功时解包 null，失败时转换网络/业务错误。
+3. Java RequestId、Redis 限流、本机回退、可选幂等键逻辑分别在 `RequestIdFilter.java:23-41`、`SimpleRateLimitFilter.java:48-82`、`IdempotencyFilter.java:41-96`。
 
-#### 3.1.2 `knowledgeBaseApi.deleteKnowledgeBase` 与 `request.delete`
+#### 3.1.2 `KnowledgeBaseController.delete`
 
-文件：`frontend/src/api/knowledgebase.ts:129-131`；`api/request.ts:47-73、123-155、170-172`。
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/knowledgebase/controller/KnowledgeBaseController.java:76-81`。
 
-1. 第 129 行定义函数；第 130 行 DELETE 动态 ID 路径；第 131 行结束。
-2. request.delete 第 170-172 行调用 Axios 并取 data；请求拦截器写 X-User-Id/X-Request-Id；响应拦截器解包成功或产生 ApiRequestError。
+1. 第 76 行映射 DELETE；第 77-78 行绑定 ID/用户头；第 79 行调用服务；第 80 行包装 success(null)；第 81 行结束。
 
-### 3.2 Java 函数
+### 3.2 Java 状态机、Python 调用与提交后缓存函数
 
-#### 3.2.1 `KnowledgeBaseController.delete`
+#### 3.2.1 `KnowledgeBaseService.delete`
 
-文件：`java-backend/src/main/java/com/interviewguide/knowledgebase/controller/KnowledgeBaseController.java:76-81`。
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/knowledgebase/service/KnowledgeBaseService.java:171-191`。
 
-1. 第 76 行映射 DELETE `/{id}`；第 77-78 行绑定 long id 和用户头。
-2. 第 79 行 service.delete；第 80 行 success(null)；第 81 行结束。
+1. 第 172 行 `required` 校验存在/owner。第 173 行 markDeleting，使正在运行的索引 worker 可在处理前检测删除请求。
+2. 第 180-183 行构造 RAG delete 请求，含 requestId、runId、user、会话标识和知识库 ID。
+3. 第 184-189 行非成功响应时提取远端错误、`markDeleteFailed`、抛 `KNOWLEDGE_BASE_VECTOR_DELETE_FAILED`。第 190 行成功时 deleteMarked；第 191 行结束。
 
-#### 3.2.2 `KnowledgeBaseService.delete`
+#### 3.2.2 `required`、`markDeleting`、`markDeleteFailed` 与 `deleteMarked`
 
-文件：`java-backend/src/main/java/com/interviewguide/knowledgebase/service/KnowledgeBaseService.java:167-181`。
+**文件与行号：** `KnowledgeBaseService.java:228-235`，`KnowledgeBasePersistenceService.java:58-102`。
 
-1. 第 168 行 required 校验存在/归属；第 169 行 markDeleting。
-2. 第 170-173 行构造 AgentRagDeleteRequest：独立 requestId、稳定 run/session 前缀、operation、KB ID 和时间；再次 require 用户 ID。
-3. 第 174-178 行 Python 响应为空或非 1xx 时取消息、markDeleteFailed 并抛 KNOWLEDGE_BASE_VECTOR_DELETE_FAILED。
-4. 第 180 行 Python 成功后 deleteMarked 删除实体；第 181 行结束。
+1. `required` 第 229-234 行按主键查询，空抛 NOT_FOUND，identity.require 后 owner 不同抛 ACCESS_DENIED。
+2. `markDeleting` 第 58-64 行事务读实体、调用实体 markDeleting、Mapper save、登记 cacheAfterCommit。
+3. `markDeleteFailed` 第 76-82 行事务写失败状态/信息、保存并提交后刷新缓存。
+4. `deleteMarked` 第 66-74 行事务检查实体确为 DELETING；否则抛状态错误；第 72 行物理 delete；第 73 行提交后清除 Java task cache。
+5. `afterCommit` 第 94-102 行无事务直接运行，有事务则注册同步回调；它保证 Redis 不领先 PostgreSQL。
 
-#### 3.2.3 `required` 与身份校验
+#### 3.2.3 Python 客户端与 RAG 删除
 
-文件：`KnowledgeBaseService.java:216-223`；`common/security/UserIdentityResolver.java:14-19`。
+**文件与行号：** `HttpPythonAgentClient.java:49、65-96`，`AgentCallExecutor.java:22-43`，Python `/v1/agent/rag/delete` 路由。
 
-1. required 第 217-218 行 Repository.findById，缺失抛 KNOWLEDGE_BASE_NOT_FOUND。
-2. 第 219-221 行 identity.require 后与 ownerId 比较，越权抛 ACCESS_DENIED；第 222 行返回。
-3. require 第 15-19 行拒绝 null/blank、strip 并返回 owner。
+1. Java client `deleteRag` 用 bounded retry executor POST Python。post 先 validate、调用 RestClient、映射结构化/HTTP/网络错误。
+2. executor 仅重试 retryable Python 错误，中断转不可重试异常。
+3. Python RAG 删除服务按知识库 ID 清理向量/文档索引，返回成功协议或可重试标记的错误；Java 根据 code 决定 DELETE_FAILED 或物理删除。
 
-#### 3.2.4 `KnowledgeBasePersistenceService` 与实体状态函数
+## 4. 主流构建分析
 
-文件：`KnowledgeBasePersistenceService.java:39-57`；`KnowledgeBaseEntity.java:91-102`。
+当前同步补偿易于理解且失败保留状态，但 Python 慢/不可用会阻塞删除请求，用户必须重试。
 
-1. markDeleting 第 39-41 行事务中 required 后调用实体；实体第 91-95 行写 DELETING、清 error、更新时间。
-2. deleteMarked 第 44-51 行 required 后确认 hasDeletionRequest，状态不允许则抛业务异常，允许时 repository.delete。
-3. markDeleteFailed 第 54-56 行 required 后调用实体；实体第 97-102 行写 DELETE_FAILED、截断错误并更新时间。
+主流模式是 Saga/异步删除任务：事务标记 DELETING 并写 outbox，Worker 删除向量，成功物理删，失败按退避重试。优点是请求快、可审计；缺点是最终一致性、任务监控和已删除记录过滤更复杂。
 
-#### 3.2.5 `HttpPythonAgentClient.deleteRag`
-
-文件：`HttpPythonAgentClient.java:49、65-96`；`AgentCallExecutor.java:22-43`。
-
-1. deleteRag 第 49 行以 callExecutor 执行 `/v1/agent/rag/delete`。
-2. post 第 66-79 行 validateRequest、POST、反序列化，并处理空 body、结构化错误、HTTP/网络异常。
-3. execute 对可重试网关错误按 maxAttempts/backoff 重试；最终异常使 Service 退出，Java 状态已经是 DELETING，非 AgentResponse 失败不会进入第 174 行的 markDeleteFailed，这是源码实际边界。
-
-### 3.3 Python 函数
-
-#### 3.3.1 `delete_rag` 与 `_resolve_rag_service`
-
-文件：`python-agent/app/api/application.py:240-252、331-337`。
-
-1. 路由第 241 行定义；第 242 行保存请求上下文；第 243 行取 RagService 并 await delete_knowledge_base。
-2. 第 244-252 行构造 code=100 AgentResponse，answer=`deleted`。
-3. _resolve_rag_service 第 332-337 行从 app.state 取实例；为空时 build_rag_service 并缓存。
-
-#### 3.3.2 `RagService.delete_knowledge_base`
-
-文件：`python-agent/app/rag/service.py:56-61、128-136`。
-
-1. 第 57-58 行拒绝空白 ID；第 59 行取得该 KB 专属 asyncio.Lock。
-2. 第 60 行 repository.delete_by_knowledge_base；第 61 行 invalidate_cache 清所有搜索缓存。
-3. _lock_for 第 131-136 行按 ID 复用或创建锁，防止删除与同一 KB 索引并发。
-
-#### 3.3.3 向量 Repository 删除
-
-文件：`python-agent/app/rag/repository.py:79-84`。
-
-1. delete_by_knowledge_base 打开异步数据库会话，执行按 knowledge_base_id 的 DELETE 并 commit。
-2. 删除零行仍视为成功，使接口幂等；同一 Java 请求重试不会因向量已不存在而失败。
-
-## 4. 审核结论
-
-1. 已覆盖前端确认、Java 删除状态机、同步 Python 向量删除、成功物理删除及失败保留分支。
-2. 每个可达项目函数均标注文件/行号并逐句解释；删除顺序严格依据源码。
+本项目适合在向量删除延迟增加时迁移。保留现有 DELETING/DELETE_FAILED 状态，新增 outbox 和重试次数/下次执行时间；列表默认隐藏已物理删除、但显示删除失败供用户/管理员重试。不要在远程删除成功前直接物理删数据库记录。

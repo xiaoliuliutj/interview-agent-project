@@ -1,105 +1,94 @@
-# POST /api/interviews/{sessionId}/complete：完成面试的完整函数调用链
+# POST /api/interviews/{sessionId}/complete：完成面试完整函数调用链逐行解析
+
+> 当前实现同步调用 Python 完成会话，不经 RabbitMQ。Java 只有在 Python 成功回显匹配身份后才把会话标为 COMPLETED 并保存最终评价 JSON。
 
 ## 1. 接口定义
 
-该接口让当前用户提前完成一场面试。Java 验证会话归属，已完成则直接返回；否则同步调用 Python `/v1/agent/sessions/complete`。Python 生成最终总结/评价（不可用时使用回退评价）、保存 Agent 会话并把长期记忆归档；Java 校验返回结果并写入 Java 会话的完成状态和最终评价。
+### 1.1 功能与作用
 
-| 项目 | 内容 |
+`POST /api/interviews/{sessionId}/complete` 供用户提前结束或完成面试。它读取/授权会话，已经 COMPLETED 时立即成功返回；否则请求 Python 汇总评价并把结果写入 Java 会话。响应 data 为 null，最终报告通过详情/导出接口读取。
+
+### 1.2 基本信息
+
+| 项目 | 当前实现 |
 | --- | --- |
-| 方法/路径 | POST `/api/interviews/{sessionId}/complete` |
-| Controller | `InterviewController.complete` |
-| Python 终点 | POST `/v1/agent/sessions/complete` |
-| 成功响应 | `ApiResult<Void>` |
-| 幂等 | Java/Python 均对已完成会话直接返回 |
+| 路径 | `POST /api/interviews/{sessionId}/complete` |
+| Controller | `InterviewController.complete`，`InterviewController.java:81-86` |
+| Python | `POST /v1/agent/sessions/complete`，operation=`agent.session.complete` |
+| 状态 | 已完成直接返回；成功写 COMPLETED 与 final_evaluation_json |
+| MQ/Redis | 不投 RabbitMQ；Python 可更新其进度缓存。|
+
+### 1.3 前端入口
+
+`frontend/src/pages/InterviewPage.tsx:282-` 的 `handleCompleteEarly` 调用 `interviewApi.completeInterview`；API 位于 `frontend/src/api/interview.ts:94-96`。
 
 ## 2. 函数调用链
 
-~~~text
-InterviewPage.handleCompleteEarly → interviewApi.completeInterview → request.post
- -> Axios/Filter/Controller.complete → UserIdentityResolver.require
- -> InterviewService.complete → ownedSession → Persistence.load
-    ->（已 COMPLETED：return）
-    -> HttpPythonAgentClient.complete → AgentCallExecutor.execute → post
-    -> Python complete_session → _remember_request_context → _resolve_service
-       -> InterviewAgentService.complete_session
-          -> Repository.get → _validate_expected_state
-          -> _report_progress → InterviewSummaryAgent.summarize 或 _fallback_evaluation
-          -> Repository.save → MemoryService.finalize_session → _report_progress
-       -> _success_response
-    -> requireMatchingResponse → Persistence.completeFromAgent
-       -> requiredForUpdate → assertOwner → Session.applyAgentResponse
-       -> storeFinalEvaluation → Session.complete → Repository.save
- -> ApiResult.success
- -> InterviewPage.getSession → initSession
-~~~
+```text
+InterviewPage.handleCompleteEarly -> interviewApi.completeInterview -> request.post
+  -> Axios interceptor -> RequestIdFilter -> SimpleRateLimitFilter -> IdempotencyFilter
+  -> InterviewController.complete -> UserIdentityResolver.require -> InterviewService.complete
+     -> ownedSession -> sessionPersistence.load / owner check
+     -> HttpPythonAgentClient.complete -> AgentCallExecutor -> post
+        -> Python complete_session -> InterviewAgentService.complete_session
+     -> requireMatchingResponse -> requireSuccess / firstNonBlank
+     -> InterviewSessionPersistenceService.completeFromAgent
+        -> requiredForUpdate -> assertOwner -> applyAgentResponse -> storeFinalEvaluation
+        -> InterviewSessionEntity.complete / advanceStateVersion -> sessionRepository.save
+  -> ApiResult.success(null)
+```
 
 ## 3. 函数解析
 
-### 3.1 前端函数
+### 3.1 前端与 Java Web 函数
 
-#### 3.1.1 `InterviewPage.handleCompleteEarly`
+#### 3.1.1 `handleCompleteEarly`、API 和请求拦截器
 
-文件：`frontend/src/pages/InterviewPage.tsx:282-299`。
+**文件与行号：** `frontend/src/pages/InterviewPage.tsx:282-`，`frontend/src/api/interview.ts:94-96`，`frontend/src/api/request.ts:47-72、123-154`。
 
-1. 第 283 行无 session 直接 return；第 285-286 行设置提交中与 SUMMARIZING。
-2. 第 288 行 await completeInterview；第 289 行关闭确认框；第 290 行重新 getSession；第 291 行 initSession 更新完成报告。
-3. 第 292-294 行显示失败信息；第 295-298 行 finally 恢复状态。
+1. 页面函数在用户确认后调用 complete API，并在成功后刷新/切换会话展示；异常经页面错误状态显示。
+2. API 第 94 行声明函数，第 95 行 POST 完成路径，第 96 行结束。
+3. `createClientId`/`currentUserId` 第 47-57 行提供身份，拦截器第 64-72 行写请求头；成功/错误拦截器第 123-154 行处理 Java 统一响应。
 
-#### 3.1.2 `interviewApi.completeInterview` 与请求封装
+#### 3.1.2 RequestId、限流、幂等和 Controller
 
-文件：`frontend/src/api/interview.ts:94-96`；`api/request.ts:47-73、161-163`。
+**文件与行号：** `RequestIdFilter.java:23-41`、`SimpleRateLimitFilter.java:48-82`、`IdempotencyFilter.java:41-96`，根目录为 `java-backend/src/main/java/com/interviewguide/infrastructure/`；`InterviewController.java:81-86`。
 
-1. 第 94 行定义函数；第 95 行 POST `/api/interviews/${sessionId}/complete` 并等待 void；第 96 行结束。
-2. request.post 第 161-163 行调用 Axios；createClientId/currentUserId 第 47-58 行生成请求 ID/读取 owner；拦截器第 64-73 行写两个请求头。
-3. 响应拦截器第 123-155 行解包成功 ApiResult 或把网络、JSON/HTTP 失败转成 ApiRequestError。
+1. RequestId filter 第 25-33 行规范/回传 ID、写 MDC、放行并 finally 清理；`normalize` 第 36-41 行无效时生成 UUID。
+2. 限流第 54-67 行使用 Redis INCR 或本机回退，第 69-79 行超限 429。POST 默认无幂等头会被 `shouldNotFilter` 跳过；提供头时 `doFilterInternal` 会占位并对重复返回 409。
+3. Controller 第 81 行映射路径，第 82-83 行绑定参数，第 84 行 require 后调用服务，第 85 行返回 success(null)，第 86 行结束。
 
-### 3.2 Java 函数
+### 3.2 Java 与 Python 完成函数
 
-#### 3.2.1 `InterviewController.complete` 与 `InterviewService.complete`
+#### 3.2.1 `InterviewService.complete`
 
-文件：`InterviewController.java:81-86`；`InterviewService.java:138-148`。
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/interview/service/InterviewService.java:138-148`。
 
-1. Controller 第 81 行映射路径；第 82-83 行绑定参数；第 84 行 require 后调用 service.complete；第 85 行返回 success(null)。
-2. Service 第 139 行 ownedSession；第 140 行若状态已 COMPLETED 直接 return。
-3. 第 141 行生成 runId；第 142-145 行构造 AgentCompleteRequest，携带上层状态和 Agent stateVersion；第 146 行校验响应；第 147 行交 persistence 写回。
+1. 第 139 行用 `ownedSession` 读取并授权。第 140 行已经 COMPLETED 时立即 return，保证重复点击不重复调用 Python。
+2. 第 141 行生成本次 runId。第 142-145 行构造 Python completion 请求，包含协议、身份、当前状态与 stateVersion。
+3. 第 146 行调用 `requireMatchingResponse`。第 147 行调用持久化完成；第 148 行结束。
 
-#### 3.2.2 `HttpPythonAgentClient.complete`、响应校验、持久化完成
+#### 3.2.2 `HttpPythonAgentClient.complete`、重试和 Python `complete_session`
 
-文件：`HttpPythonAgentClient.java:45、65-96`；`InterviewService.java:202-236`；`InterviewSessionPersistenceService.java:141-148`。
+**文件与行号：** `HttpPythonAgentClient.java:45、65-96`，`AgentCallExecutor.java:22-43`，`python-agent/app/api/application.py:135-`。
 
-1. complete 第 45 行以 callExecutor 执行固定 complete 路径；post 第 65-79 行校验 DTO、POST、处理空响应和 HTTP/网络异常。
-2. requireSuccess 第 202-215 行拒绝非 1xx；requireMatchingResponse 第 226-236 行再核对用户、会话、runId。
-3. completeFromAgent 第 142 行锁定读取，143 行 assertOwner，144 行 applyAgentResponse，145 行 storeFinalEvaluation，146 行实体 complete，147 行 save。
-4. storeFinalEvaluation 第 124-131 行只在 output 有 finalEvaluation 时 JSON 序列化；失败保留可完成会话。实体 complete（InterviewSessionEntity.java:113-116）写 COMPLETED 和更新时间。
+1. Java client 第 45 行经 `AgentCallExecutor.execute` POST Python。`post` 第 65-79 行校验/调用/转换远端异常；`execute` 第 22-34 行只对 retryable 异常重试，`sleepBeforeRetry` 第 36-43 行处理中断。
+2. Python 路由第 135 行注册 complete；读取 payload、保存请求上下文、解析服务。若 operation 是 pause 则走暂停分支，否则调用 `complete_session`，将结果回显成 AgentResponse。
+3. Python InterviewAgentService 的 `complete_session` 负责汇总最终评价、保存会话与进度。模型/依赖异常通过 Python 统一异常处理返回带 retryable 属性的协议错误。
 
-### 3.3 Python 函数
+#### 3.2.3 响应校验与 `completeFromAgent`
 
-#### 3.3.1 `complete_session` 路由
+**文件与行号：** `InterviewService.java:202-237`，`InterviewSessionPersistenceService.java:143-152、126-133`。
 
-文件：`python-agent/app/api/application.py:132-153`。
+1. `requireSuccess` 第 202-217 行只接受 100–199 code；`firstNonBlank` 第 219-224 行选择错误文本；`requireMatchingResponse` 第 226-237 行校验 user/session/run 完全相同。
+2. `completeFromAgent` 第 143 行事务开始。第 145 行锁定会话；第 146 行再次 assertOwner；第 147 行应用 Python 状态/答案/版本/stage。
+3. 第 148 行调用 `storeFinalEvaluation`。该函数第 126-127 行空 output 直接返回，第 128-129 行 JSON 序列化 finalEvaluation，第 130-132 行格式异常时保留已完成会话。
+4. 第 149 行调用实体 `complete`，第 150 行推进 Java stateVersion，第 151 行 MyBatis 保存，第 152 行结束。
 
-1. 第 133 行定义路由；第 134 行保存上下文并解析服务。
-2. 第 136-146 行按 operation 调 `pause_session` 或 `complete_session`；本接口 operation 为 `agent.session.complete`，因此进入 complete_session。
-3. 第 147-153 行把 finalEvaluation（存在时）写 output 并以 _success_response 返回。
+## 4. 主流构建分析
 
-#### 3.3.2 `InterviewAgentService.complete_session`
+同步完成优点是用户点击后立即得到稳定最终状态与报告；缺点是总结模型调用可能较慢，用户网络中断时需要靠重试/详情确认真实完成状态。
 
-文件：`python-agent/app/agents/interview/service.py:191-233`。
+主流改进可把完成设计为命令任务：先持久化 `COMPLETING`，异步 Worker 生成报告，前端订阅状态。优点是长汇总不阻塞 HTTP，能稳定重试；缺点是需要新状态、事件和等待体验。
 
-1. 第 197-201 行查 Agent 会话并校验 user；第 202-206 行已 COMPLETED/FAILED 时幂等返回或归档中断记忆。
-2. 第 207-211 行验证 Java 状态/版本；第 213 行保存 expected_version；第 214-218 行报 SUMMARIZING、标 COMPLETED、生成回退摘要。
-3. 第 219-225 行有总结 Agent 和 turn 时调用 summarize；异常只记日志，不使会话无法完成。
-4. 第 226-230 行确保 final_evaluation、清 RAG 缓存并以乐观锁保存；第 231 行 finalize_session；第 232 行报 COMPLETED；第 233 行返回。
-
-#### 3.3.3 `InterviewSummaryAgent.summarize`、回退与记忆归档
-
-文件：`agents/interview/agent.py:352-362`；`service.py:873-900`；`memory/service.py:146-175`。
-
-1. summarize 第 353-357 行把难度、计划、全部 turns 序列化；第 358-362 行以 summary prompt 调 StructuredOutputInvoker，得到 InterviewSummary。
-2. _fallback_summary 第 873-877 行按 interrupted 和回合数产生文本；_fallback_evaluation 第 880-900 行无回合返回零分说明，有回合计算平均分、截取优缺点并构造可用报告。
-3. finalize_session 第 147-151 行读记忆并去重；第 153-168 行汇总分数/优缺点、更新长期摘要和已完成会话 ID；第 169-175 行乐观锁保存，并在冲突时确认是否已归档。
-
-## 4. 审核结论
-
-1. 已覆盖前端确认、Java 会话授权、同步 Python 总结、Java 最终评价写回和前端重新读取详情。
-2. 每个可达项目函数均包含文件、行号与逐句说明；已完成分支不重复调用 Python。
+本项目可保留同步完成并增加 `COMPLETING`/runId 查询作为渐进改进：若客户端超时，详情返回该状态，前端轮询；任务量高时再把同一 runId 放入 Outbox/Worker，保持当前身份回显与版本检查。

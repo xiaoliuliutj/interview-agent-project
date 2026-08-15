@@ -1,85 +1,77 @@
-# GET /api/knowledgebase/categories：查询知识库分类列表的完整函数调用链
+# GET /api/knowledgebase/categories：查询分类列表完整函数调用链逐行解析
+
+> 当前接口按用户读取其知识库后，在 Java 流中提取非空 category 并去重；不调用 Python、RabbitMQ 或 Redis。
 
 ## 1. 接口定义
 
-接口读取当前用户的全部知识库，提取非空 category 并去重。由于 Repository 先按创建时间倒序，`distinct()` 保留每个分类第一次出现的位置，即按该分类最近知识库的相对顺序返回；源码没有额外字母排序。接口不调用 Python。
+### 1.1 功能与作用
 
-| 项目 | 内容 |
+`GET /api/knowledgebase/categories` 返回当前用户已使用的知识库分类字符串列表，用于前端管理页筛选和分类选择。
+
+### 1.2 基本信息
+
+| 项目 | 当前实现 |
 | --- | --- |
-| 方法/路径 | GET `/api/knowledgebase/categories` |
-| 返回 | `ApiResult<List<String>>` |
-| 空分类 | null/blank 被过滤 |
-| 去重 | Stream.distinct，保留首次遇到顺序 |
-| Python 调用 | 无 |
+| 路径 | `GET /api/knowledgebase/categories` |
+| Controller | `KnowledgeBaseController.categories`，`KnowledgeBaseController.java:83-87` |
+| 数据 | knowledge_bases，按 owner_id 查询 |
+| Python/MQ/Redis | 无调用。|
+
+### 1.3 前端入口
+
+`knowledgeBaseApi.categories` 位于 `frontend/src/api/knowledgebase.ts:133-135`，调用该路径获得字符串数组。
 
 ## 2. 函数调用链
 
-~~~text
-KnowledgeBaseManagePage.loadData/loadDataSilent
- -> knowledgeBaseApi.getAllCategories → request.get → Axios 拦截器
- -> RequestIdFilter → SimpleRateLimitFilter
- -> KnowledgeBaseController.categories
- -> KnowledgeBaseService.categories
-    -> UserIdentityResolver.require
-    -> Repository.findByOwnerIdOrderByCreatedAtDesc
-    -> KnowledgeBaseEntity.getCategory → filter → distinct → toList
- -> ApiResult.success → setCategories
-~~~
+```text
+knowledgeBaseApi.categories -> request.get -> Axios interceptor
+  -> RequestIdFilter -> SimpleRateLimitFilter -> IdempotencyFilter(GET skip)
+  -> KnowledgeBaseController.categories -> KnowledgeBaseService.categories
+     -> UserIdentityResolver.require -> KnowledgeBaseRepository.findByOwnerIdOrderByCreatedAtDesc
+     -> stream.map/filter/distinct/toList
+  -> ApiResult.success
+```
 
 ## 3. 函数解析
 
-### 3.1 前端函数
+### 3.1 前端、过滤器和 Controller 函数
 
-#### 3.1.1 `loadData`、`loadDataSilent` 中的分类调用
+#### 3.1.1 `knowledgeBaseApi.categories` 与请求函数
 
-文件：`frontend/src/pages/KnowledgeBaseManagePage.tsx:141-180`。
+**文件与行号：** `frontend/src/api/knowledgebase.ts:133-135`，`frontend/src/api/request.ts:47-72、123-164`。
 
-1. 两个函数都使用 `Promise.all` 同时加载知识库数据和 `knowledgeBaseApi.getAllCategories()`：静默函数调用位于第 150 行，显式函数位于第 171 行。
-2. 第 154/175 行把 categoryList 写入 `setCategories`；失败分支分别保留旧数据显示错误或设置 error。
-3. 分类查询与列表查询并行，任一 Promise 失败都会使对应 `Promise.all` 进入 catch。
+1. API 函数调用 `request.get<string[]>('/api/knowledgebase/categories')` 并返回数组 Promise。
+2. request.ts 的 client ID/用户 ID、请求拦截器写 X-User-Id 和 X-Request-Id；成功拦截器解包 code 200，错误拦截器处理失败。
+3. Java RequestId、Redis 限流/本机回退、GET 幂等跳过位于 infrastructure 的三个 filter 文件，执行顺序与所有公开接口一致。
 
-#### 3.1.2 `knowledgeBaseApi.getAllCategories` 与 `request.get`
+#### 3.1.2 `KnowledgeBaseController.categories` 与 `ApiResult.success`
 
-文件：`frontend/src/api/knowledgebase.ts:133-135`；`api/request.ts:47-73、123-160`。
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/knowledgebase/controller/KnowledgeBaseController.java:83-87`，`common/web/dto/ApiResult.java:3-6`。
 
-1. 第 133 行声明 string[] 返回；第 134 行 GET 固定 categories 路径；第 135 行结束。
-2. request.get 第 158-160 行调用 Axios 并取 data；createClientId/currentUserId 第 47-58 行提供请求 ID/用户。
-3. 请求拦截器第 64-73 行写两个头；响应拦截器第 123-155 行解包 ApiResult 或解析失败。
+1. 第 83 行映射 categories；第 84-85 行绑定用户头；第 86 行调用 service 并 success 包装；第 87 行结束。
+2. `success` 第 4-6 行创建 code=200、message=success、data 的 record。
 
-### 3.2 Java 函数
+### 3.2 Java 查询与分类流函数
 
-#### 3.2.1 `KnowledgeBaseController.categories`
+#### 3.2.1 `KnowledgeBaseService.categories`
 
-文件：`java-backend/src/main/java/com/interviewguide/knowledgebase/controller/KnowledgeBaseController.java:83-87`。
+**文件与行号：** `java-backend/src/main/java/com/interviewguide/knowledgebase/service/KnowledgeBaseService.java:193-197`。
 
-1. 第 83 行映射 GET `/categories`；第 84-85 行声明列表返回并读取可缺省 X-User-Id。
-2. 第 86 行调用 service.categories 并 ApiResult.success；第 87 行结束。
+1. 第 194 行先 `identity.require(userId)`，再调用 Mapper 按 owner 获取记录。
+2. 第 195 行 map 到 entity.category；第 196 行过滤 null/空白、调用 distinct 保留首次出现顺序、toList 收集；第 197 行结束。
+3. 分类未额外排序，顺序继承 Mapper 的 created_at DESC 首次出现顺序。
 
-#### 3.2.2 `KnowledgeBaseService.categories`
+#### 3.2.2 Mapper 与身份函数
 
-文件：`java-backend/src/main/java/com/interviewguide/knowledgebase/service/KnowledgeBaseService.java:183-187`。
+**文件与行号：** `KnowledgeBaseRepository.java:15`，`resources/mapper/knowledgebase/KnowledgeBaseRepository.xml:5`，`common/security/UserIdentityResolver.java:14-19`。
 
-1. 第 183 行接收 userId。
-2. 第 184 行先 identity.require，再调用按 owner、createdAt 倒序的 Repository 查询。
-3. 第 185 行对每条实体调用 getCategory；第 186 行过滤 null/blank、distinct 去重、toList 返回；第 187 行结束。
+1. require 拒绝空身份并 strip。
+2. Mapper XML 以 `WHERE owner_id=#{ownerId} ORDER BY created_at DESC` 查询，保证只读取当前用户数据。
 
-#### 3.2.3 `UserIdentityResolver.require`、Repository 与 getter
+## 4. 主流构建分析
 
-文件：`common/security/UserIdentityResolver.java:14-19`；`KnowledgeBaseRepository.java:10-26`；`KnowledgeBaseEntity.java:91-111`。
+当前“读全部后 distinct”实现简单，但分类数量/文档量增大时会传输不必要实体。
 
-1. require 第 15-17 行拒绝 null/blank，第 18 行 strip，第 19 行返回 owner。
-2. Repository 的 `findByOwnerIdOrderByCreatedAtDesc` 是项目声明的派生查询，限制用户并倒序返回。
-3. `KnowledgeBaseEntity.getCategory` 是单句 return，不规范化、strip 或修改 category；因此只含空白的值由 Service 的 isBlank 过滤，带首尾空白的非空分类不会在此自动清理。
+主流实现是 MyBatis `SELECT DISTINCT category ... WHERE owner_id=? AND category IS NOT NULL AND trim(category)<>'' ORDER BY category`。优点是数据库去重、数据更少；缺点是分类显示顺序从最近使用变为字母序，需明确产品语义。
 
-#### 3.2.4 `ApiResult.success` 与 Python 边界
-
-文件：`common/web/dto/ApiResult.java:3-6`。
-
-1. 第 4-5 行构造 code=200、message=success、data=分类列表的 record。
-2. 调用链只有 Java Repository/Stream，不含 PythonAgentClient、indexWorker、RabbitTemplate 或 `/v1/**`，Java→Python 次数为零。
-
-## 4. 审核结论
-
-1. 已覆盖前端并行加载、Java 用户过滤、空值过滤、稳定去重和响应封装。
-2. 已纠正“排序”边界：源码不显式排序分类，只继承知识库创建时间倒序后的首次出现顺序。
-3. 每个可达项目函数均标注文件、行号并解释；确认不调用 Python。
+本项目可在分类量增加时添加专用 Mapper；若要保持当前最近使用顺序，可用 PostgreSQL `DISTINCT ON(category) ORDER BY category, created_at DESC` 再按 created_at 排序。
