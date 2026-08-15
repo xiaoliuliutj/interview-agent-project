@@ -10,7 +10,7 @@
 | 路径 | `/v1/agent/respond` |
 | 请求模型 | `AgentRespondRequest` |
 | 路由函数 | `respond` |
-| 文件 | `python-agent/app/api/application.py:93-130` |
+| 文件 | `python-agent/app/api/application.py:96-133` |
 | 总超时 | `INTERVIEW_TURN_TIMEOUT_SECONDS = 150.0` |
 
 ## 2. 函数调用链
@@ -55,7 +55,7 @@ ApplicationException/Exception -> application_error/unexpected_error
 
 ### 3.1 `respond`
 
-文件：`python-agent/app/api/application.py:93-130`
+文件：`python-agent/app/api/application.py:96-133`
 
 ```python
     @app.post("/v1/agent/respond", response_model=AgentResponse)
@@ -126,7 +126,7 @@ ApplicationException/Exception -> application_error/unexpected_error
 
 ### 3.2 `_candidate_response_output`
 
-文件：`python-agent/app/api/application.py:423-432`
+文件：`python-agent/app/api/application.py:426-435`
 
 ```python
 def _candidate_response_output(output: dict[str, object] | None) -> dict[str, object] | None:
@@ -152,7 +152,7 @@ def _candidate_response_output(output: dict[str, object] | None) -> dict[str, ob
 
 ### 3.3 `InterviewAgentService.submit_answer_for_run`
 
-文件：`python-agent/app/agents/interview/service.py:256-273`
+文件：`python-agent/app/agents/interview/service.py:279-296`
 
 ```python
     async def submit_answer_for_run(
@@ -184,7 +184,7 @@ def _candidate_response_output(output: dict[str, object] | None) -> dict[str, ob
 
 ### 3.4 `InterviewAgentService._submit_answer`
 
-文件：`python-agent/app/agents/interview/service.py:275-397`
+文件：`python-agent/app/agents/interview/service.py:298-420`
 
 ```python
     async def _submit_answer(self, *, user_id: str, session_id: str,
@@ -292,6 +292,26 @@ def _candidate_response_output(output: dict[str, object] | None) -> dict[str, ob
 15. Repository 使用 `expected_version` 乐观保存；成功后才持久化长期记忆，避免半完成轮次污染记忆。
 16. 终态会话继续归档记忆；最后更新可查询进度并返回保存后的会话与本轮快照。
 
-## 4. 审核结论
+### 3.5 `_submit_answer` 调用的项目辅助函数
 
-回答接口包含幂等重放、乐观状态校验、四类模型节点、RAG/网页证据、短期/长期记忆和持久化分支。各被调内部函数的完整源码与逐行解析继续在 `02-Agent`、`03-RAG`、`04-记忆工具` 和 `06-网页抓取工具` 文档中展开。
+1. `_validate_expected_state`（`agents/interview/service.py:428-440`）依次比较 expected sessionStatus、stateVersion 与会话真实值；任一不一致抛 `ConsistencyError`，两者缺失时不阻断兼容请求。
+2. `_allowed_actions`（442-490）按会话阶段、主问题预算、追问预算和已用题量建立允许动作集合；完成预算时只允许 COMPLETE，阶段不可追问时移除 FOLLOW_UP。
+3. `_replan_after_opening`（492-520）将开场答案合并进 CandidateProfile，再经 `_run_interview_node` 重新调用 planner；成功后替换计划/技能/题量，失败保留原计划。
+4. `_enforce_route_limits`（522-580）验证模型 action 在允许集合中，不满足时调用 `_fallback_route`（582-610）；同时校正 next_topic、FOLLOW_UP 次数和阶段边界。
+5. `_current_stage_topic`（612-628）从工作流阶段配置取当前未覆盖主题；`_next_stage_route`（630-649）构造跳转下一阶段或完成的确定性路由；`_next_stage`（651-657）按 workflow 顺序找后继阶段。
+6. `_synchronize_turn_memory`（659-665）在幂等快照命中但长期记忆可能漏写时查找对应 turn 并补调 `MemoryService.record_turn`。
+7. `_record_turn`（667-691）将问题、答案、评价、阶段、主题、证据和时间组装为 TurnRecord，追加到 session.turns，并更新累计分数及 stage progress。
+8. `_compact_session_history`（728-739）只保留最近 `limit` 个 turn 的完整答案，其余转为紧凑摘要，控制会话 JSON 与模型上下文大小。
+9. `_apply_route`（741-769）按 COMPLETE/FOLLOW_UP/NEXT_QUESTION/ADVANCE_STAGE 更新会话状态、阶段、追问计数和主题；未知动作抛一致性错误。
+10. `_question_evidence`（771-850）先按 `_evidence_cache_key`（852-860）查会话证据缓存，再调用 RAG；`_evidence_is_insufficient`（862-866）判断证据不足时才调用 WebEvidenceTool，最后缓存脱敏证据。
+11. `_complete`（868-875）将会话状态和阶段设为 COMPLETED、清空当前问题并更新时间；`_candidate_visible_output`（877-901）只返回评价摘要、分数、优缺点、题量和最终评价等白名单字段。
+12. `_fallback_summary`（903-908）在总结模型失败时生成确定性文本；`_fallback_evaluation`（910-931）依据历史轮次计算平均分并生成结构化最终评价。
+13. `InterviewEvaluationAgent.evaluate`（`agents/interview/agent.py:186-219`）、`InterviewRoutingAgent.route`（242-281）、`InterviewQuestionAgent.generate`（300-331）、`InterviewSummaryAgent.summarize`（350-369）均通过 StructuredOutputInvoker 加载 Prompt、构造输入、执行受限重试并做 Pydantic 校验。
+14. `MemoryService.build_context`（`memory/service.py:99-120`）组合短期 turn 与用户长期记忆；`record_turn`（122-144）合并本轮偏好/强弱项并持久化；`finalize_session`（146-165）写入结束或中断摘要。
+15. `PostgresInterviewSessionRepository.save`（`infrastructure/persistence/interview_session_repository.py:67-97`）用 expected_version 执行乐观更新，受影响行数不为 1 时回滚并抛一致性错误，成功后提交、刷新并映射领域会话。
+
+## 4. 主流构建分析
+
+主流实时 Agent 会把一次回答建模为可恢复的工作流实例：API 先以 runId 写入回答和 PENDING step，工作流引擎依次执行评价、检索、路由、出题，每步持久化检查点并通过事件流推送进度。优点是 150 秒以上任务可断点恢复、单节点独立重试、审计清晰；缺点是需要 Temporal/Cadence/自建状态机、活动幂等和更复杂的数据一致性。
+
+本项目已有 runId 快照、stateVersion 乐观锁、节点超时、Redis 进度和确定性回退，单轮同步体验较好，暂不必引入完整工作流引擎。若并发和模型链长度继续增加，可先将 `_submit_answer` 拆成带 step 字段的数据库状态机：Java 接口返回 runId，Python Worker 对 EVALUATE/RETRIEVE/ROUTE/GENERATE 分步落库，复用现有每个 Agent 函数；前端通过现有 progress 接口或 SSE 获取结果，runId 与 stateVersion 继续作为幂等和并发边界。
