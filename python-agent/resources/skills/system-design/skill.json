@@ -1,0 +1,10 @@
+{
+  "id": "system-design",
+  "name": "系统设计面试",
+  "description": "围绕高并发、分布式、一致性、可用性和容量设计提问。",
+  "enabled": true,
+  "allowedTools": [
+    "rag.search"
+  ]
+}
+

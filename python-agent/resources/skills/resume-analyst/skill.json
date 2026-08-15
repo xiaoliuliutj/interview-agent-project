@@ -1,0 +1,8 @@
+{
+  "id": "resume-analyst",
+  "name": "简历评估",
+  "description": "依据简历事实和岗位要求生成可解释的评估。",
+  "enabled": true,
+  "allowedTools": []
+}
+

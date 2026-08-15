@@ -15,11 +15,26 @@ services:
       retries: 20
     restart: unless-stopped
 
-  redis:
+  # Java and Python deliberately use independent Redis instances.  A cache
+  # surge or maintenance event in one service cannot evict/interrupt the
+  # other's operational data.
+  redis-java:
     image: redis:7.4-alpine
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
-      - redis-data:/data
+      - redis-java-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis-python:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-python-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -53,8 +68,11 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      REDIS_URL: redis://redis-python:6379
     depends_on:
       postgres:
+        condition: service_healthy
+      redis-python:
         condition: service_healthy
     healthcheck:
       test:
@@ -73,7 +91,7 @@ services:
       DATABASE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-interview_agent}
       DATABASE_USERNAME: ${POSTGRES_USER:-interview}
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://redis-java:6379
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_USER: ${RABBITMQ_USER:-interview}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
@@ -92,7 +110,7 @@ services:
         condition: service_healthy
       python-agent:
         condition: service_healthy
-      redis:
+      redis-java:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
@@ -123,5 +141,6 @@ services:
 
 volumes:
   postgres-data:
-  redis-data:
+  redis-java-data:
+  redis-python-data:
   java-files:

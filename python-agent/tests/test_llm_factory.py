@@ -1,9 +1,9 @@
 from langchain_openai import ChatOpenAI
 import pytest
 
-from app.core.config import Settings
-from app.core.exceptions import ModelConfigurationError
-from app.agent.llm import LLMFactory
+from app.common.config import Settings
+from app.common.exceptions import ModelConfigurationError
+from app.agents.llm import LLMFactory
 
 
 def test_create_chat_model_from_settings_without_network_call() -> None:

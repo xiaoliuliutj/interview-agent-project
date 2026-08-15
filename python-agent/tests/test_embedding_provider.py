@@ -1,5 +1,5 @@
-from app.agent.rag.embedding import OpenAIEmbeddingProvider
-from app.core.config import Settings
+from app.rag.embedding import OpenAIEmbeddingProvider
+from app.common.config import Settings
 
 
 def test_openai_compatible_embedding_sends_strings_without_token_arrays() -> None:

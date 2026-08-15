@@ -1,0 +1,10 @@
+{
+  "id": "ai-agent-dev",
+  "name": "AI Agent 开发面试",
+  "description": "围绕 Agent、RAG、Tools、MCP、记忆和可观测性提问。",
+  "enabled": true,
+  "allowedTools": [
+    "rag.search"
+  ]
+}
+

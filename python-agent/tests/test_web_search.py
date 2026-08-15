@@ -1,4 +1,4 @@
-from app.agent.web_search import _allowed_technical_url, _unwrap_search_url
+from app.tools.web_search import _allowed_technical_url, _unwrap_search_url
 
 
 def test_automatic_web_search_is_restricted_to_technical_domains() -> None:

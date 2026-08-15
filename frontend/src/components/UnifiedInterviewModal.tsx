@@ -1,22 +1,27 @@
 import { useEffect } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ChevronDown, ChevronUp, FileStack, Loader2, Sparkles, X } from 'lucide-react';
-import { useInterviewConfig, CUSTOM_SKILL_ID, DIFFICULTY_OPTIONS, type Difficulty } from '../hooks/useInterviewConfig';
+import { ChevronDown, ChevronUp, FileStack, Sparkles, X } from 'lucide-react';
+import {
+  CUSTOM_INTERVIEW_DIRECTION,
+  DIFFICULTY_OPTIONS,
+  type Difficulty,
+  useInterviewConfig,
+} from '../hooks/useInterviewConfig';
+import type { CategoryDTO } from '../types/interview-config';
 
 export type { Difficulty };
 
 export interface UnifiedInterviewConfig {
-  skillId?: string;
-  skillName: string;
+  interviewDirection?: string;
   difficulty: Difficulty;
   resumeId: string;
   plannedDuration: number;
   targetRole: string;
   jdText?: string;
-  customCategories: import('../api/skill').CategoryDTO[];
+  customCategories: CategoryDTO[];
 }
 
-interface UnifiedInterviewModalProps {
+interface Props {
   isOpen: boolean;
   onClose: () => void;
   onStart: (config: UnifiedInterviewConfig) => void;
@@ -26,38 +31,53 @@ interface UnifiedInterviewModalProps {
   startButtonText?: string;
 }
 
+const DIRECTIONS = [
+  ['java-backend', 'Java 后端'],
+  ['python-backend', 'Python 后端'],
+  ['frontend', '前端开发'],
+  ['system-design', '系统设计'],
+  ['algorithm', '算法与数据结构'],
+  ['ai-agent', 'AI Agent'],
+] as const;
+
 export default function UnifiedInterviewModal({
   isOpen,
   onClose,
   onStart,
   defaultResumeId,
-  title = '开始文本面试',
-  subtitle = '配置面试参数后开始',
+  title = '开始模拟面试',
+  subtitle = '选择业务方向；Python Agent 会在服务端自主规划面试与 Skills',
   startButtonText = '开始面试',
-}: UnifiedInterviewModalProps) {
+}: Props) {
   const config = useInterviewConfig({ defaultResumeId, autoLoad: false });
 
   useEffect(() => {
     if (!isOpen) return;
-    if (defaultResumeId != null) {
+    if (defaultResumeId) {
       config.setResumeId(defaultResumeId);
       config.setShowMore(true);
     }
-    void Promise.all([config.loadSkills(), config.loadResumes()]);
+    void config.loadResumes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, defaultResumeId]);
 
-  const handleStart = () => {
-    if (config.isCustomStartDisabled || !config.resumeId || !config.targetRole.trim()) return;
+  const canStart = Boolean(
+    config.resumeId
+      && config.targetRole.trim()
+      && config.plannedDuration >= 15
+      && !config.isCustomStartDisabled,
+  );
+
+  const start = () => {
+    if (!canStart || !config.resumeId) return;
     onStart({
-      skillId: config.skillId,
-      skillName: config.selectedSkill?.name ?? '下层自动选择',
+      interviewDirection: config.interviewDirection,
       difficulty: config.difficulty,
       resumeId: config.resumeId,
       plannedDuration: config.plannedDuration,
       targetRole: config.targetRole.trim(),
-      jdText: config.isCustomSkill ? config.customJdText.trim() : undefined,
-      customCategories: config.isCustomSkill ? config.customCategories : [],
+      jdText: config.isCustomDirection ? config.customJdText.trim() : undefined,
+      customCategories: [],
     });
   };
 
@@ -65,48 +85,69 @@ export default function UnifiedInterviewModal({
     <AnimatePresence>
       {isOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4">
-          <motion.div initial={{ opacity: 0, scale: .96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: .96 }}
-            className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white shadow-xl dark:bg-slate-800">
-            <div className="flex items-start justify-between border-b border-slate-100 p-6 dark:border-slate-700">
-              <div><h2 className="text-xl font-bold text-slate-900 dark:text-white">{title}</h2><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{subtitle}</p></div>
-              <button onClick={onClose} aria-label="关闭" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"><X className="h-5 w-5" /></button>
-            </div>
-
+          <motion.div initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.96 }} className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white shadow-xl dark:bg-slate-800">
+            <header className="flex items-start justify-between border-b border-slate-100 p-6 dark:border-slate-700">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900 dark:text-white">{title}</h2>
+                <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
+              </div>
+              <button type="button" onClick={onClose} aria-label="关闭" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100">
+                <X className="h-5 w-5" />
+              </button>
+            </header>
             <div className="space-y-6 p-6">
               <section>
-                <label className="mb-3 block text-sm font-semibold text-slate-700 dark:text-slate-200">面试方向</label>
-                {config.loadingSkills ? <Loader2 className="h-5 w-5 animate-spin text-primary-500" /> : (
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                    {config.skills.map(skill => {
-                      const Icon = config.getSkillIcon(skill.id);
-                      const selected = skill.id === config.skillId;
-                      return <button key={skill.id} onClick={() => config.setSkillId(skill.id)} className={`rounded-xl border-2 p-3 text-left ${selected ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20' : 'border-slate-200 dark:border-slate-700'}`}>
-                        <span className="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-white">{Icon ? <Icon className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}{skill.name}</span>
-                      </button>;
-                    })}
-                    <button onClick={() => config.setSkillId(CUSTOM_SKILL_ID)} className={`rounded-xl border-2 border-dashed p-3 text-left ${config.isCustomSkill ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20' : 'border-slate-200 dark:border-slate-700'}`}><span className="text-sm font-medium text-slate-700 dark:text-slate-200">自定义 JD</span></button>
-                  </div>
-                )}
+                <p className="mb-3 text-sm font-semibold">面试方向</p>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {DIRECTIONS.map(([value, label]) => (
+                    <button type="button" key={value} onClick={() => config.setInterviewDirection(value)} className={'rounded-xl border-2 p-3 text-left text-sm ' + (config.interviewDirection === value ? 'border-primary-500 bg-primary-50' : 'border-slate-200')}>
+                      <Sparkles className="mr-2 inline h-4 w-4" />{label}
+                    </button>
+                  ))}
+                  <button type="button" onClick={() => config.setInterviewDirection(CUSTOM_INTERVIEW_DIRECTION)} className={'rounded-xl border-2 border-dashed p-3 text-left text-sm ' + (config.isCustomDirection ? 'border-primary-500 bg-primary-50' : 'border-slate-200')}>
+                    自定义 JD
+                  </button>
+                </div>
               </section>
-
-              {config.isCustomSkill && <section className="space-y-3 rounded-xl bg-slate-50 p-4 dark:bg-slate-900/40">
-                <textarea value={config.customJdText} onChange={event => config.setCustomJdText(event.target.value)} rows={4} placeholder="粘贴职位描述（至少 50 个字符）" className="w-full resize-none rounded-xl border border-slate-200 bg-white p-3 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white" />
-                <button onClick={() => void config.handleParseJd().catch(error => alert(error instanceof Error ? error.message : 'JD 解析失败'))} disabled={config.parsingJd || !config.customJdText.trim()} className="flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"><Sparkles className="h-4 w-4" />{config.parsingJd ? '解析中…' : '解析 JD'}</button>
-                {config.customCategories.length > 0 && <div className="flex flex-wrap gap-2">{config.customCategories.map(category => <span key={`${category.label}-${category.priority}`} className="rounded-full bg-primary-100 px-3 py-1 text-xs text-primary-700">{category.label}</span>)}</div>}
-              </section>}
-
+              {config.isCustomDirection && (
+                <textarea rows={4} value={config.customJdText} onChange={event => config.setCustomJdText(event.target.value)} placeholder="粘贴岗位描述（至少 50 个字符）" className="w-full rounded-xl border border-slate-200 p-3 text-sm" />
+              )}
               <section className="grid gap-4 sm:grid-cols-2">
-                <label className="text-sm font-semibold text-slate-700 dark:text-slate-200">目标岗位<input value={config.targetRole} onChange={event => config.setTargetRole(event.target.value)} placeholder="例如：Java 后端实习生" className="mt-2 w-full rounded-xl border border-slate-200 p-3 font-normal dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label>
-                <label className="text-sm font-semibold text-slate-700 dark:text-slate-200">简历<select value={config.resumeId ?? ''} onChange={event => config.setResumeId(event.target.value || undefined)} className="mt-2 w-full rounded-xl border border-slate-200 p-3 font-normal dark:border-slate-700 dark:bg-slate-800 dark:text-white"><option value="">请选择当前简历</option>{config.resumes.map(resume => <option key={resume.id} value={resume.id}>{resume.filename ?? resume.id}</option>)}</select></label>
+                <label className="text-sm font-semibold">目标岗位
+                  <input value={config.targetRole} onChange={event => config.setTargetRole(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 p-3 font-normal" />
+                </label>
+                <label className="text-sm font-semibold">简历
+                  <select value={config.resumeId ?? ''} onChange={event => config.setResumeId(event.target.value || undefined)} className="mt-2 w-full rounded-xl border border-slate-200 p-3 font-normal">
+                    <option value="">请选择当前简历</option>
+                    {config.resumes.map(resume => <option key={resume.id} value={resume.id}>{resume.filename ?? resume.id}</option>)}
+                  </select>
+                </label>
               </section>
-
-              <section><label className="mb-3 block text-sm font-semibold text-slate-700 dark:text-slate-200">难度</label><div className="grid grid-cols-3 gap-2">{DIFFICULTY_OPTIONS.map(option => <button key={option.value} onClick={() => config.setDifficulty(option.value)} className={`rounded-xl border-2 p-3 ${config.difficulty === option.value ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20' : 'border-slate-200 dark:border-slate-700'}`}><span className="block text-sm font-medium text-slate-800 dark:text-white">{option.label}</span><span className="text-xs text-slate-400">{option.desc}</span></button>)}</div></section>
-
-              <button onClick={() => config.setShowMore(!config.showMore)} className="flex w-full items-center gap-2 text-sm text-slate-500"><span>更多参数</span>{config.showMore ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}<span className="flex-1 border-t border-slate-200 dark:border-slate-700" /></button>
-              {config.showMore && <section className="grid gap-4 rounded-xl bg-slate-50 p-4 dark:bg-slate-900/40"><label className="text-sm text-slate-600 dark:text-slate-300">面试时长（分钟）<input type="number" min={15} max={120} value={config.plannedDuration} onChange={event => config.setPlannedDuration(Number(event.target.value))} className="mt-2 w-full rounded-lg border border-slate-200 p-2 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label><div className="flex items-center gap-2 text-xs text-slate-500"><FileStack className="h-4 w-4" />题量由 Agent 根据回答动态决定，最多 20 题</div></section>}
+              <section>
+                <p className="mb-3 text-sm font-semibold">难度</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {DIFFICULTY_OPTIONS.map(option => (
+                    <button type="button" key={option.value} onClick={() => config.setDifficulty(option.value)} className={'rounded-xl border-2 p-3 ' + (config.difficulty === option.value ? 'border-primary-500 bg-primary-50' : 'border-slate-200')}>
+                      <span className="block text-sm font-medium">{option.label}</span>
+                      <span className="text-xs text-slate-400">{option.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+              <button type="button" onClick={() => config.setShowMore(!config.showMore)} className="flex w-full items-center gap-2 text-sm text-slate-500">
+                更多参数 {config.showMore ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </button>
+              {config.showMore && (
+                <label className="block text-sm">面试时长（分钟）
+                  <input type="number" min={15} max={120} value={config.plannedDuration} onChange={event => config.setPlannedDuration(Number(event.target.value))} className="mt-2 w-full rounded-lg border border-slate-200 p-2" />
+                </label>
+              )}
+              <p className="flex items-center gap-2 text-xs text-slate-500"><FileStack className="h-4 w-4" />题目由 Python Agent 动态决定，最多 20 题。</p>
             </div>
-
-            <div className="flex gap-3 border-t border-slate-100 bg-slate-50 p-6 dark:border-slate-700 dark:bg-slate-900/40"><button onClick={onClose} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm dark:border-slate-700 dark:text-slate-200">取消</button><button onClick={handleStart} disabled={config.isCustomStartDisabled || !config.resumeId || !config.targetRole.trim() || config.plannedDuration < 15} className="flex-1 rounded-xl bg-primary-500 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">{startButtonText}</button></div>
+            <footer className="flex gap-3 border-t border-slate-100 bg-slate-50 p-6">
+              <button type="button" onClick={onClose} className="flex-1 rounded-xl border border-slate-200 px-4 py-3">取消</button>
+              <button type="button" onClick={start} disabled={!canStart} className="flex-1 rounded-xl bg-primary-500 px-4 py-3 font-semibold text-white disabled:opacity-50">{startButtonText}</button>
+            </footer>
           </motion.div>
         </div>
       )}

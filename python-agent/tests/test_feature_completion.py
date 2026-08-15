@@ -2,10 +2,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent.interview.models import InterviewAction, InterviewStage, TurnRecord
-from app.agent.memory.models import LongTermMemory
-from app.agent.memory.policy import MemoryPolicy
-from app.agent.memory.service import MemoryService
+from app.agents.interview.models import InterviewAction, InterviewStage, TurnRecord
+from app.memory.models import LongTermMemory
+from app.memory.policy import MemoryPolicy
+from app.memory.service import MemoryService
 
 
 class MemoryRepository:

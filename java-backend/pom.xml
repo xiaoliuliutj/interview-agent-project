@@ -11,10 +11,10 @@
         <relativePath/>
     </parent>
 
-    <groupId>com.interview.agent</groupId>
-    <artifactId>interview-agent-upper</artifactId>
+    <groupId>com.interviewguide</groupId>
+    <artifactId>interview-guide-backend</artifactId>
     <version>0.1.0-SNAPSHOT</version>
-    <name>interview-agent-upper</name>
+    <name>interview-guide-backend</name>
     <description>Java upper-layer business service for Interview Agent</description>
 
     <properties>
@@ -31,8 +31,9 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-jpa</artifactId>
+            <groupId>org.mybatis.spring.boot</groupId>
+            <artifactId>mybatis-spring-boot-starter</artifactId>
+            <version>3.0.4</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

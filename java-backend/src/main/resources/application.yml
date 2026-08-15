@@ -1,14 +1,10 @@
 spring:
   application:
-    name: interview-agent-upper
+    name: interview-guide-backend
   datasource:
     url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/interview_agent}
     username: ${DATABASE_USERNAME:postgres}
     password: ${DATABASE_PASSWORD:}
-  jpa:
-    open-in-view: false
-    hibernate:
-      ddl-auto: validate
   sql:
     init:
       mode: always
@@ -16,6 +12,8 @@ spring:
   data:
     redis:
       url: ${REDIS_URL:redis://localhost:6379}
+      timeout: ${JAVA_REDIS_TIMEOUT:200ms}
+      connect-timeout: ${JAVA_REDIS_CONNECT_TIMEOUT:200ms}
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
@@ -30,6 +28,11 @@ spring:
           initial-interval: ${AGENT_RABBIT_RETRY_INITIAL_INTERVAL_MS:1000}
           multiplier: ${AGENT_RABBIT_RETRY_MULTIPLIER:2.0}
           max-interval: ${AGENT_RABBIT_RETRY_MAX_INTERVAL_MS:10000}
+
+mybatis:
+  mapper-locations: classpath:mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
 
 server:
   port: ${SERVER_PORT:8080}
@@ -52,8 +55,6 @@ agent:
   python:
     base-url: ${PYTHON_AGENT_BASE_URL:http://localhost:8000}
     connect-timeout: ${PYTHON_AGENT_CONNECT_TIMEOUT:2s}
-    # 下层一次物理模型请求最多 120 秒，网络重试最多 5 次；异步消费者必须
-    # 等到下层返回标准错误 JSON，才能把具体失败原因写回任务与前端。
     read-timeout: ${PYTHON_AGENT_READ_TIMEOUT:11m}
   reliability:
     max-attempts: ${AGENT_MAX_ATTEMPTS:2}

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.interviewguide.interview.mapper.JobDescriptionRepository">
+  <select id="findById" resultType="com.interviewguide.interview.domain.JobDescriptionEntity">SELECT * FROM job_descriptions WHERE id=#{id}</select>
+  <insert id="upsert">INSERT INTO job_descriptions (id,title,version,content) VALUES (#{id},#{title},#{version},#{content}) ON CONFLICT (id) DO UPDATE SET title=EXCLUDED.title,version=EXCLUDED.version,content=EXCLUDED.content</insert>
+</mapper>

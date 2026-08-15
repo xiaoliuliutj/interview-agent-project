@@ -1,11 +1,11 @@
 import pytest
 
-from app.agent.evaluation.models import ResumeEvaluation
-from app.core.exceptions import ModelOutputError
-from app.core.prompt_loader import PromptLoader
-from app.engineering.reliability.policy import RetryPolicy
-from app.engineering.reliability.retry import AsyncRetryExecutor
-from app.engineering.reliability.structured_output import StructuredOutputInvoker
+from app.agents.evaluation.models import ResumeEvaluation
+from app.common.exceptions import ModelOutputError
+from app.common.prompt_loader import PromptLoader
+from app.infrastructure.reliability.policy import RetryPolicy
+from app.infrastructure.reliability.retry import AsyncRetryExecutor
+from app.infrastructure.reliability.structured_output import StructuredOutputInvoker
 
 
 class SequencedModel:

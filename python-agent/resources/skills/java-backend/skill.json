@@ -1,0 +1,10 @@
+{
+  "id": "java-backend",
+  "name": "Java 后端面试",
+  "description": "围绕 Java、Spring、数据库、缓存、并发和服务工程能力提问。",
+  "enabled": true,
+  "allowedTools": [
+    "rag.search"
+  ]
+}
+

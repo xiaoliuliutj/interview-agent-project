@@ -10,16 +10,15 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.agent.evaluation.agent import ResumeEvaluationAgent
-from app.agent.interview.models import CandidateProfile, InterviewSession, DEFAULT_TARGET_QUESTION_COUNT
-from app.agent.interview.service import InterviewAgentService
-from app.agent.memory.service import MemoryService
-from app.agent.rag.models import KnowledgeDocument
-from app.agent.rag.service import RagService
-from app.agent.skills.loader import SkillRegistry
-from app.agent.web_reader import crawl_public_site, fetch_public_article
+from app.agents.evaluation.agent import ResumeEvaluationAgent
+from app.agents.interview.models import CandidateProfile, InterviewSession, DEFAULT_TARGET_QUESTION_COUNT
+from app.agents.interview.service import InterviewAgentService
+from app.memory.service import MemoryService
+from app.rag.models import KnowledgeDocument
+from app.rag.service import RagService
+from app.tools.web_reader import crawl_public_site, fetch_public_article
 from app.bootstrap import build_interview_agent_service, build_resume_evaluation_agent
-from app.core.contracts import (
+from app.common.contracts import (
     AgentEvaluationRequest,
     AgentInitializationRequest,
     AgentRagIndexRequest,
@@ -28,13 +27,12 @@ from app.core.contracts import (
     AgentRespondRequest,
     AgentResponse,
     AgentSessionCompletionRequest,
-    AgentSkillRequest,
     AgentWebFetchRequest,
     AgentWebCrawlRequest,
     RunStatus,
     SessionStatus,
 )
-from app.core.exceptions import (
+from app.common.exceptions import (
     AgentDependencyError,
     ApplicationException,
     ConsistencyError,
@@ -66,6 +64,9 @@ def create_app(
     @app.get("/v1/agent/sessions/{session_id}/progress")
     async def session_progress(session_id: str, request: Request) -> dict[str, str]:
         service = _resolve_service(request)
+        async_progress = getattr(service, "progress_for_async", None)
+        if callable(async_progress):
+            return {"stage": await async_progress(session_id)}
         progress = getattr(service, "progress_for", None)
         return {"stage": progress(session_id) if callable(progress) else "IDLE"}
 
@@ -251,22 +252,6 @@ def create_app(
             answer=None, output=None, error=None,
         )
 
-    @app.post("/v1/agent/skills", response_model=AgentResponse)
-    async def skills_catalog(payload: AgentSkillRequest, request: Request) -> AgentResponse:
-        _remember_request_context(request, payload)
-        if payload.operation == "agent.skills.parse-jd" and payload.input_text is None:
-            raise RequestError("agent.skills.parse-jd requires inputText")
-        registry = SkillRegistry()
-        output = ({"skills": registry.public_catalog()} if payload.operation == "agent.skills.list"
-                  else {"categories": registry.categories_for_jd(payload.input_text)})
-        return AgentResponse(
-            api_version=payload.api_version, request_id=payload.request_id,
-            run_id=payload.run_id, code=100, status=RunStatus.COMPLETED,
-            user_id=payload.user_id, session_id=payload.session_id,
-            session_status=SessionStatus.ACTIVE, state_version=0,
-            answer=json.dumps(output, ensure_ascii=False), output=output, error=None,
-        )
-
     @app.post("/v1/tools/web/fetch", response_model=AgentResponse)
     async def fetch_web(payload: AgentWebFetchRequest, request: Request) -> AgentResponse:
         """Fetch and extract a single public HTML page for preview/import.
@@ -288,10 +273,10 @@ def create_app(
     @app.post("/v1/tools/web/crawl", response_model=AgentResponse)
     async def crawl_web(payload: AgentWebCrawlRequest, request: Request) -> AgentResponse:
         _remember_request_context(request, payload)
-        from app.agent.llm.factory import LLMFactory
-        from app.agent.web_crawl_agent import WebCrawlPlanningAgent
-        from app.engineering.reliability.policy import RetryPolicy
-        from app.engineering.reliability.retry import AsyncRetryExecutor
+        from app.agents.llm.factory import LLMFactory
+        from app.agents.web_crawl.agent import WebCrawlPlanningAgent
+        from app.infrastructure.reliability.policy import RetryPolicy
+        from app.infrastructure.reliability.retry import AsyncRetryExecutor
         assessor = WebCrawlPlanningAgent(
             LLMFactory.create_chat_model(), PromptLoader(), AsyncRetryExecutor(RetryPolicy.load())
         )

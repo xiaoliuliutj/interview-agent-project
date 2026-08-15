@@ -31,7 +31,22 @@ ALTER TABLE IF EXISTS resume_analyses ADD COLUMN IF NOT EXISTS target_role VARCH
 ALTER TABLE IF EXISTS resume_analyses ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE IF EXISTS resume_analyses ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ;
 
-ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS skill_id VARCHAR(255);
+ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS interview_direction VARCHAR(255);
+-- Compatibility for databases created by the old UI.  The legacy value is
+-- treated only as a display direction; Python still selects actual Skills.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'interview_sessions'
+          AND column_name = 'skill_id'
+    ) THEN
+        EXECUTE 'UPDATE interview_sessions
+                 SET interview_direction = COALESCE(interview_direction, NULLIF(skill_id, ''''))
+                 WHERE interview_direction IS NULL';
+    END IF;
+END $$;
 ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS difficulty VARCHAR(32);
 ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS agent_state_version BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS current_stage VARCHAR(32);

@@ -1,4 +1,4 @@
-from app.engineering.reliability.policy import RetryPolicy
+from app.infrastructure.reliability.policy import RetryPolicy
 
 
 def test_openai_server_error_is_retryable() -> None:

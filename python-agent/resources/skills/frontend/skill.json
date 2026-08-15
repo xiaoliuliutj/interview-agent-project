@@ -1,0 +1,10 @@
+{
+  "id": "frontend",
+  "name": "前端面试",
+  "description": "围绕 JavaScript、React/Vue、浏览器和前端工程化提问。",
+  "enabled": true,
+  "allowedTools": [
+    "rag.search"
+  ]
+}
+

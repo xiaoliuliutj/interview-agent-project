@@ -1,12 +1,12 @@
 import pytest
 import tiktoken
 
-from app.agent.rag.models import KnowledgeDocument, RagUseCase
-from app.agent.rag.parser import TokenChunker
-from app.agent.rag.policy import RagPolicy
-from app.agent.rag.repository import InMemoryVectorRepository
-from app.agent.rag.service import RagService
-from app.core.exceptions import RagDependencyError
+from app.rag.models import KnowledgeDocument, RagUseCase
+from app.rag.parser import TokenChunker
+from app.rag.policy import RagPolicy
+from app.rag.repository import InMemoryVectorRepository
+from app.rag.service import RagService
+from app.common.exceptions import RagDependencyError
 
 
 class FakeEmbeddingProvider:

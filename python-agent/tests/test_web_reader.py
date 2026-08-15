@@ -2,9 +2,9 @@ import pytest
 import httpx
 from datetime import datetime, timezone
 
-from app.agent.web_reader import validate_public_url
-from app.core.exceptions import AgentDependencyError
-from app.agent.web_reader import WebDocument
+from app.tools.web_reader import validate_public_url
+from app.common.exceptions import AgentDependencyError
+from app.tools.web_reader import WebDocument
 from app.api.application import create_app
 
 
@@ -24,7 +24,7 @@ def test_web_reader_rejects_unsafe_urls(url: str):
 
 def test_web_reader_accepts_standard_public_url(monkeypatch):
     monkeypatch.setattr(
-        "app.agent.web_reader.socket.getaddrinfo",
+        "app.tools.web_reader.socket.getaddrinfo",
         lambda *args, **kwargs: [(None, None, None, None, ("93.184.216.34", 0))],
     )
     assert validate_public_url("https://example.com/article") == "https://example.com/article"

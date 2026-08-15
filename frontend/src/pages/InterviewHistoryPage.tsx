@@ -100,7 +100,7 @@ export default function InterviewHistoryPage({
               <FileText className="h-6 w-6 text-primary-500" />
               <div className="min-w-0 flex-1">
                 <button onClick={() => onViewInterview(session.sessionId, session.resumeId)} className="font-medium text-slate-800 hover:text-primary-500 dark:text-white">
-                  {session.skillId ?? '通用'} · {session.difficulty}
+                  {session.interviewDirection ?? '通用'} · {session.difficulty}
                 </button>
                 <p className="mt-1 text-sm text-slate-500">{formatDateTime(session.createdAt)} · 已发出 {session.issuedQuestionCount} 题 · 动态上限 {session.totalQuestions} · {session.status}</p>
                 {session.finalEvaluation?.summary && (

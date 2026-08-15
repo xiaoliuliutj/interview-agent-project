@@ -1,9 +1,9 @@
 import pytest
 
-from app.agent.evaluation.agent import ResumeEvaluationAgent
-from app.agent.evaluation.models import ResumeEvaluation
-from app.agent.skills.loader import SkillRegistry
-from app.core.prompt_loader import PromptLoader
+from app.agents.evaluation.agent import ResumeEvaluationAgent
+from app.agents.evaluation.models import ResumeEvaluation
+from app.tools.skills.loader import SkillRegistry
+from app.common.prompt_loader import PromptLoader
 
 
 class FakeStructuredModel:

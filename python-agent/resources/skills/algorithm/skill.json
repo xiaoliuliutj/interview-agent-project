@@ -1,0 +1,10 @@
+{
+  "id": "algorithm",
+  "name": "算法面试",
+  "description": "围绕数据结构、算法思路、复杂度和编码实现提问。",
+  "enabled": true,
+  "allowedTools": [
+    "rag.search"
+  ]
+}
+

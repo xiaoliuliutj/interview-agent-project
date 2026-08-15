@@ -1,52 +1,21 @@
-import httpx
 import json
 import pytest
 from types import SimpleNamespace
 
-from app.agent.interview.agent import InterviewPlanner
-from app.agent.interview.models import CandidateProfile, Difficulty
-from app.agent.skills.loader import SkillRegistry
-from app.api.application import create_app
-from app.core.prompt_loader import PromptLoader
+from app.agents.interview.agent import InterviewPlanner
+from app.agents.interview.models import CandidateProfile, Difficulty
+from app.tools.skills.loader import SkillRegistry
+from app.common.prompt_loader import PromptLoader
 
 REQUEST_TIMESTAMP = "2026-08-09T00:00:00Z"
 
 
-@pytest.mark.asyncio
-async def test_skill_catalog_and_jd_parser_are_deterministic() -> None:
-    transport = httpx.ASGITransport(app=create_app())
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        catalog_response = await client.post(
-            "/v1/agent/skills",
-            json={
-                "apiVersion": "v1",
-                "requestId": "skill-list-1",
-                "runId": "skill-list-run-1",
-                "userId": "catalog-user",
-                "sessionId": "skill-catalog",
-                "operation": "agent.skills.list",
-                "timestamp": REQUEST_TIMESTAMP,
-            },
-        )
-        jd_response = await client.post(
-            "/v1/agent/skills",
-            json={
-                "apiVersion": "v1",
-                "requestId": "skill-jd-1",
-                "runId": "skill-jd-run-1",
-                "userId": "catalog-user",
-                "sessionId": "skill-catalog",
-                "operation": "agent.skills.parse-jd",
-                "inputText": "需要 Java、Spring Boot 和 Redis 经验",
-                "timestamp": REQUEST_TIMESTAMP,
-            },
-        )
+def test_skill_catalog_and_jd_parser_are_internal_registry_capabilities() -> None:
+    registry = SkillRegistry()
+    catalog = registry.public_catalog()
+    categories = registry.categories_for_jd("需要 Java、Spring Boot 和 Redis 经验")
 
-    assert catalog_response.status_code == 200
-    assert catalog_response.json()["code"] == 100
-    assert catalog_response.json()["output"]["skills"][0]["id"] == "java-backend"
-    assert jd_response.status_code == 200
-    categories = jd_response.json()["output"]["categories"]
+    assert catalog[0]["id"] == "java-backend"
     assert {item["key"] for item in categories} >= {"java", "spring", "distributed"}
 
 
@@ -103,7 +72,7 @@ async def test_planner_reads_runtime_catalog_before_selecting_skills() -> None:
         jd_text="计算机视觉、OpenCV、目标检测",
         target_role="计算机视觉算法工程师", interview_duration_minutes=30,
         desired_difficulty=Difficulty.MEDIUM, question_count=20,
-        requested_skill_id=None, custom_categories=[],
+        interview_direction=None, custom_categories=[],
         system_knowledge_base_ids=[], user_knowledge_base_ids=[],
     )
 

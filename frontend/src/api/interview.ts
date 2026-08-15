@@ -4,7 +4,7 @@ import type { CreateInterviewRequest, InterviewQuestion, InterviewSession, Submi
 interface InterviewView {
   sessionId: string;
   resumeId: string;
-  skillId: string | null;
+  interviewDirection: string | null;
   difficulty: string;
   totalQuestions: number;
   status: InterviewSession['status'];
@@ -63,7 +63,7 @@ export const interviewApi = {
       targetRole: input.targetRole,
       interviewDurationMinutes: input.interviewDurationMinutes,
       desiredDifficulty: input.difficulty,
-      skillId: input.skillId ?? null,
+      interviewDirection: input.interviewDirection ?? null,
       jdText: input.jdText ?? null,
       customCategories: input.customCategories,
     }, { timeout: 180000 });

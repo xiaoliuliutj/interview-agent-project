@@ -2,18 +2,18 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent.interview.models import (
+from app.agents.interview.models import (
     CandidateProfile,
     Difficulty,
     InterviewAction,
     InterviewStage,
     TurnRecord,
 )
-from app.agent.memory.models import LongTermMemory
-from app.agent.memory.policy import MemoryPolicy
-from app.agent.memory.service import MemoryService
-from app.core.exceptions import ConsistencyError
-from app.agent.evaluation.models import ResumeEvaluation
+from app.memory.models import LongTermMemory
+from app.memory.policy import MemoryPolicy
+from app.memory.service import MemoryService
+from app.common.exceptions import ConsistencyError
+from app.agents.evaluation.models import ResumeEvaluation
 
 
 class InMemoryLongTermMemoryRepository:

@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent.interview.models import InterviewAction, InterviewRoute, InterviewStage
-from app.core.contracts import SessionStatus
+from app.agents.interview.models import InterviewAction, InterviewRoute, InterviewStage
+from app.common.contracts import SessionStatus
 
 from test_interview_service import (
     InMemorySessionRepository,

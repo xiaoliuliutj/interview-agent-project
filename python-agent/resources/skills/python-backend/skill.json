@@ -1,0 +1,10 @@
+{
+  "id": "python-backend",
+  "name": "Python 后端面试",
+  "description": "围绕 Python Web、异步、数据库和工程实践提问。",
+  "enabled": true,
+  "allowedTools": [
+    "rag.search"
+  ]
+}
+

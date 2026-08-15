@@ -1,4 +1,4 @@
-from app.agent.mcp.server import lookup_interview_reference
+from app.tools.mcp.server import lookup_interview_reference
 
 
 def test_mcp_reference_tool_is_read_only_and_bounded() -> None:

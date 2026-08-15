@@ -46,7 +46,7 @@ export default function Layout() {
       state: {
         resumeId: config.resumeId,
         interviewConfig: {
-          skillId: config.skillId,
+          interviewDirection: config.interviewDirection,
           difficulty: config.difficulty,
           targetRole: config.targetRole,
           interviewDurationMinutes: config.plannedDuration,

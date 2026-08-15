@@ -1,4 +1,4 @@
-import type { CategoryDTO } from '../api/skill';
+import type { CategoryDTO } from './interview-config';
 
 export interface InterviewQuestion {
   questionIndex: number;
@@ -13,7 +13,7 @@ export interface InterviewQuestion {
 export interface InterviewSession {
   sessionId: string;
   resumeId: string;
-  skillId: string | null;
+  interviewDirection: string | null;
   difficulty: string;
   totalQuestions: number;
   status: 'INITIALIZING' | 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'FAILED';
@@ -44,7 +44,7 @@ export interface CreateInterviewRequest {
   targetRole: string;
   interviewDurationMinutes: number;
   difficulty: string;
-  skillId?: string;
+  interviewDirection?: string;
   jdText?: string;
   customCategories: CategoryDTO[];
 }

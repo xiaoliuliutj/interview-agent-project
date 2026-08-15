@@ -1,0 +1,413 @@
+[
+  {
+    "id": "java-backend",
+    "name": "Java 后端",
+    "description": "考察 Java 后端、Spring、数据库、缓存、并发与服务工程能力。",
+    "isPreset": true,
+    "sourceJd": null,
+    "categories": [
+      {
+        "key": "java",
+        "label": "Java 基础",
+        "priority": "CORE",
+        "keywords": [
+          "java",
+          "jvm"
+        ]
+      },
+      {
+        "key": "spring",
+        "label": "Spring",
+        "priority": "CORE",
+        "keywords": [
+          "spring",
+          "spring boot",
+          "springcloud"
+        ]
+      },
+      {
+        "key": "database",
+        "label": "数据库",
+        "priority": "NORMAL",
+        "keywords": [
+          "mysql",
+          "postgresql",
+          "sql"
+        ]
+      },
+      {
+        "key": "distributed",
+        "label": "分布式与并发",
+        "priority": "NORMAL",
+        "keywords": [
+          "分布式",
+          "并发",
+          "redis",
+          "kafka"
+        ]
+      },
+      {
+        "key": "project",
+        "label": "项目深挖",
+        "priority": "ALWAYS_ONE",
+        "keywords": [
+          "项目",
+          "实习",
+          "系统"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "python-backend",
+    "name": "Python 后端",
+    "description": "考察 Python Web、异步编程、数据库和工程实践。",
+    "isPreset": true,
+    "sourceJd": null,
+    "categories": [
+      {
+        "key": "python",
+        "label": "Python 基础",
+        "priority": "CORE",
+        "keywords": [
+          "python",
+          "cpython",
+          "gil",
+          "typing"
+        ]
+      },
+      {
+        "key": "web",
+        "label": "Web 框架",
+        "priority": "CORE",
+        "keywords": [
+          "fastapi",
+          "django",
+          "flask",
+          "web"
+        ]
+      },
+      {
+        "key": "async",
+        "label": "异步与并发",
+        "priority": "NORMAL",
+        "keywords": [
+          "asyncio",
+          "异步",
+          "并发",
+          "celery"
+        ]
+      },
+      {
+        "key": "database",
+        "label": "数据库与缓存",
+        "priority": "NORMAL",
+        "keywords": [
+          "postgresql",
+          "mysql",
+          "redis",
+          "sql"
+        ]
+      },
+      {
+        "key": "project",
+        "label": "项目深挖",
+        "priority": "ALWAYS_ONE",
+        "keywords": [
+          "项目",
+          "实习",
+          "服务"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "frontend",
+    "name": "前端开发",
+    "description": "考察 JavaScript、React/Vue、浏览器和前端工程化。",
+    "isPreset": true,
+    "sourceJd": null,
+    "categories": [
+      {
+        "key": "javascript",
+        "label": "JavaScript",
+        "priority": "CORE",
+        "keywords": [
+          "javascript",
+          "typescript",
+          "js",
+          "ts"
+        ]
+      },
+      {
+        "key": "framework",
+        "label": "React 与 Vue",
+        "priority": "CORE",
+        "keywords": [
+          "react",
+          "vue",
+          "next.js",
+          "vite"
+        ]
+      },
+      {
+        "key": "browser",
+        "label": "浏览器原理",
+        "priority": "NORMAL",
+        "keywords": [
+          "浏览器",
+          "渲染",
+          "http",
+          "性能"
+        ]
+      },
+      {
+        "key": "engineering",
+        "label": "工程化",
+        "priority": "NORMAL",
+        "keywords": [
+          "webpack",
+          "构建",
+          "工程化",
+          "测试"
+        ]
+      },
+      {
+        "key": "project",
+        "label": "项目深挖",
+        "priority": "ALWAYS_ONE",
+        "keywords": [
+          "项目",
+          "实习",
+          "组件"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "algorithm",
+    "name": "算法与数据结构",
+    "description": "考察数据结构、算法思路、复杂度和编码实现。",
+    "isPreset": true,
+    "sourceJd": null,
+    "categories": [
+      {
+        "key": "data-structure",
+        "label": "数据结构",
+        "priority": "CORE",
+        "keywords": [
+          "数组",
+          "链表",
+          "树",
+          "图",
+          "数据结构"
+        ]
+      },
+      {
+        "key": "algorithm",
+        "label": "算法",
+        "priority": "CORE",
+        "keywords": [
+          "算法",
+          "动态规划",
+          "二分",
+          "回溯",
+          "贪心"
+        ]
+      },
+      {
+        "key": "complexity",
+        "label": "复杂度",
+        "priority": "NORMAL",
+        "keywords": [
+          "复杂度",
+          "时间复杂度",
+          "空间复杂度"
+        ]
+      },
+      {
+        "key": "coding",
+        "label": "代码实现",
+        "priority": "NORMAL",
+        "keywords": [
+          "手撕",
+          "编码",
+          "leetcode"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "system-design",
+    "name": "系统设计",
+    "description": "考察高并发、分布式、存储、缓存与稳定性设计。",
+    "isPreset": true,
+    "sourceJd": null,
+    "categories": [
+      {
+        "key": "architecture",
+        "label": "架构设计",
+        "priority": "CORE",
+        "keywords": [
+          "系统设计",
+          "架构",
+          "微服务",
+          "设计"
+        ]
+      },
+      {
+        "key": "consistency",
+        "label": "一致性",
+        "priority": "CORE",
+        "keywords": [
+          "一致性",
+          "事务",
+          "分布式事务",
+          "幂等"
+        ]
+      },
+      {
+        "key": "availability",
+        "label": "高可用",
+        "priority": "NORMAL",
+        "keywords": [
+          "高可用",
+          "限流",
+          "熔断",
+          "降级"
+        ]
+      },
+      {
+        "key": "capacity",
+        "label": "容量与性能",
+        "priority": "NORMAL",
+        "keywords": [
+          "高并发",
+          "性能",
+          "容量",
+          "压测"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "computer-vision",
+    "name": "计算机视觉",
+    "description": "考察图像处理、检测分割、视觉模型训练评估与部署。",
+    "isPreset": true,
+    "sourceJd": null,
+    "categories": [
+      {
+        "key": "image-processing",
+        "label": "图像处理基础",
+        "priority": "CORE",
+        "keywords": [
+          "计算机视觉",
+          "computer vision",
+          "opencv",
+          "图像处理"
+        ]
+      },
+      {
+        "key": "detection",
+        "label": "检测与分割",
+        "priority": "CORE",
+        "keywords": [
+          "目标检测",
+          "yolo",
+          "分割",
+          "语义分割",
+          "实例分割"
+        ]
+      },
+      {
+        "key": "training",
+        "label": "训练与评估",
+        "priority": "NORMAL",
+        "keywords": [
+          "mAP",
+          "iou",
+          "数据增强",
+          "迁移学习",
+          "模型训练"
+        ]
+      },
+      {
+        "key": "vision-deploy",
+        "label": "部署与优化",
+        "priority": "NORMAL",
+        "keywords": [
+          "onnx",
+          "tensorrt",
+          "推理",
+          "量化",
+          "ocr"
+        ]
+      },
+      {
+        "key": "project",
+        "label": "项目深挖",
+        "priority": "ALWAYS_ONE",
+        "keywords": [
+          "视觉项目",
+          "图像项目",
+          "算法项目"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "ai-agent-dev",
+    "name": "AI Agent 开发",
+    "description": "考察 Agent、RAG、Tools、MCP、记忆与可观测性。",
+    "isPreset": true,
+    "sourceJd": null,
+    "categories": [
+      {
+        "key": "agent",
+        "label": "Agent 架构",
+        "priority": "CORE",
+        "keywords": [
+          "agent",
+          "智能体",
+          "react",
+          "规划"
+        ]
+      },
+      {
+        "key": "rag",
+        "label": "RAG",
+        "priority": "CORE",
+        "keywords": [
+          "rag",
+          "检索增强",
+          "向量",
+          "embedding"
+        ]
+      },
+      {
+        "key": "tool",
+        "label": "Tools 与 MCP",
+        "priority": "NORMAL",
+        "keywords": [
+          "tool",
+          "mcp",
+          "function calling",
+          "工具"
+        ]
+      },
+      {
+        "key": "memory",
+        "label": "记忆与工程化",
+        "priority": "NORMAL",
+        "keywords": [
+          "记忆",
+          "memory",
+          "评估",
+          "可观测"
+        ]
+      }
+    ]
+  }
+]
+

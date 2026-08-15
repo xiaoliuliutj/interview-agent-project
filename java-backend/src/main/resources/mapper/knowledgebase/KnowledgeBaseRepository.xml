@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.interviewguide.knowledgebase.mapper.KnowledgeBaseRepository">
+  <select id="findById" resultType="com.interviewguide.knowledgebase.domain.KnowledgeBaseEntity">SELECT * FROM knowledge_bases WHERE id=#{id}</select>
+  <select id="findByOwnerIdOrderByCreatedAtDesc" resultType="com.interviewguide.knowledgebase.domain.KnowledgeBaseEntity">SELECT * FROM knowledge_bases WHERE owner_id=#{ownerId} ORDER BY created_at DESC</select>
+  <select id="findByOwnerIdAndCategory" resultType="com.interviewguide.knowledgebase.domain.KnowledgeBaseEntity">SELECT * FROM knowledge_bases WHERE owner_id=#{ownerId} AND category=#{category}</select>
+  <select id="findByOwnerIdAndNameContainingIgnoreCase" resultType="com.interviewguide.knowledgebase.domain.KnowledgeBaseEntity">SELECT * FROM knowledge_bases WHERE owner_id=#{ownerId} AND LOWER(name) LIKE CONCAT('%',LOWER(#{keyword}),'%')</select>
+  <select id="findByOwnerIdAndVectorStatus" resultType="com.interviewguide.knowledgebase.domain.KnowledgeBaseEntity">SELECT * FROM knowledge_bases WHERE owner_id=#{ownerId} AND vector_status=#{vectorStatus}</select>
+  <select id="findByIdInAndVectorStatus" resultType="com.interviewguide.knowledgebase.domain.KnowledgeBaseEntity">SELECT * FROM knowledge_bases WHERE id IN <foreach collection="ids" item="item" open="(" separator="," close=")">#{item}</foreach> AND vector_status=#{vectorStatus}</select>
+  <insert id="upsert">INSERT INTO knowledge_bases (id,owner_id,name,category,original_filename,file_size,content_type,original_bytes,content,vector_status,vector_error,chunk_count,created_at,updated_at,source_url,source_title,source_fetched_at,source_hash) VALUES (#{id},#{ownerId},#{name},#{category},#{originalFilename},#{fileSize},#{contentType},#{originalBytes},#{content},#{vectorStatus},#{vectorError},#{chunkCount},#{createdAt},#{updatedAt},#{sourceUrl},#{sourceTitle},#{sourceFetchedAt},#{sourceHash}) ON CONFLICT (id) DO UPDATE SET category=EXCLUDED.category,original_bytes=EXCLUDED.original_bytes,vector_status=EXCLUDED.vector_status,vector_error=EXCLUDED.vector_error,chunk_count=EXCLUDED.chunk_count,updated_at=EXCLUDED.updated_at</insert>
+  <delete id="delete">DELETE FROM knowledge_bases WHERE id=#{id}</delete>
+</mapper>

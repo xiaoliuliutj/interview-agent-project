@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS interview_sessions (
     candidate_id VARCHAR(255),
     resume_id VARCHAR(255),
     jd_id VARCHAR(255),
-    skill_id VARCHAR(255),
+    interview_direction VARCHAR(255),
     difficulty VARCHAR(32),
     total_questions INTEGER NOT NULL,
     status VARCHAR(32),

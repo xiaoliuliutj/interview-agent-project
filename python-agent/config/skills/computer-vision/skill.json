@@ -1,7 +1,0 @@
-{
-  "id": "computer-vision",
-  "name": "计算机视觉",
-  "description": "面向计算机视觉、图像处理、检测分割、视觉模型训练与部署的结构化面试约束。",
-  "enabled": true,
-  "allowedTools": ["rag.search"]
-}

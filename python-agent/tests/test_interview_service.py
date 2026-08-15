@@ -4,7 +4,7 @@ from collections import deque
 import pytest
 from types import SimpleNamespace
 
-from app.agent.interview.models import (
+from app.agents.interview.models import (
     CandidateProfile,
     Difficulty,
     InterviewAction,
@@ -15,15 +15,15 @@ from app.agent.interview.models import (
     InterviewStage,
     StagePlan,
 )
-from app.agent.interview.service import InterviewAgentService
-from app.agent.interview.workflow import InterviewWorkflow
-from app.agent.memory.models import LongTermMemory
-from app.agent.memory.policy import MemoryPolicy
-from app.agent.memory.service import MemoryService
-from app.agent.rag.models import KnowledgeChunk, RagSearchResult
-from app.core.contracts import SessionStatus
-from app.core.exceptions import AgentDependencyError, ConsistencyError
-from app.core.prompt_loader import PromptLoader
+from app.agents.interview.service import InterviewAgentService
+from app.agents.interview.workflow import InterviewWorkflow
+from app.memory.models import LongTermMemory
+from app.memory.policy import MemoryPolicy
+from app.memory.service import MemoryService
+from app.rag.models import KnowledgeChunk, RagSearchResult
+from app.common.contracts import SessionStatus
+from app.common.exceptions import AgentDependencyError, ConsistencyError
+from app.common.prompt_loader import PromptLoader
 
 
 class InMemorySessionRepository:
@@ -156,6 +156,11 @@ class HangingWebEvidenceTool:
 
 class HangingEvaluationAgent:
     async def evaluate(self, session, candidate_answer, memory_context):
+        await asyncio.sleep(10)
+
+
+class HangingPlanner:
+    async def create_plan(self, profile: CandidateProfile) -> InterviewPlan:
         await asyncio.sleep(10)
 
 
@@ -498,8 +503,8 @@ async def test_insufficient_rag_falls_back_to_web_and_caches_result() -> None:
 @pytest.mark.asyncio
 async def test_slow_optional_evidence_does_not_block_question_generation(monkeypatch) -> None:
     repository, events = InMemorySessionRepository(), []
-    monkeypatch.setattr("app.agent.interview.service.INTERVIEW_RAG_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr("app.agent.interview.service.INTERVIEW_WEB_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr("app.agents.interview.service.INTERVIEW_RAG_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr("app.agents.interview.service.INTERVIEW_WEB_TIMEOUT_SECONDS", 0.01)
     service, _, _, _ = build_service(
         repository, [evaluation()], [], events, HangingRagTool(), HangingWebEvidenceTool()
     )
@@ -517,7 +522,7 @@ async def test_slow_optional_evidence_does_not_block_question_generation(monkeyp
 async def test_slow_evaluation_fails_promptly_and_keeps_failed_progress(monkeypatch) -> None:
     repository, events = InMemorySessionRepository(), []
     monkeypatch.setattr(
-        "app.agent.interview.service.INTERVIEW_MODEL_NODE_TIMEOUT_SECONDS", 0.01
+        "app.agents.interview.service.INTERVIEW_MODEL_NODE_TIMEOUT_SECONDS", 0.01
     )
     service, _, _, _ = build_service(repository, [], [], events)
     service._evaluation_agent = HangingEvaluationAgent()
@@ -531,6 +536,23 @@ async def test_slow_evaluation_fails_promptly_and_keeps_failed_progress(monkeypa
         )
 
     assert service.progress_for("session-timeout") == "FAILED"
+
+
+@pytest.mark.asyncio
+async def test_slow_planning_fails_promptly_and_keeps_failed_progress(monkeypatch) -> None:
+    repository, events = InMemorySessionRepository(), []
+    monkeypatch.setattr(
+        "app.agents.interview.service.INTERVIEW_MODEL_NODE_TIMEOUT_SECONDS", 0.01
+    )
+    service, _, _, _ = build_service(repository, [], [], events)
+    service._planner = HangingPlanner()
+
+    with pytest.raises(AgentDependencyError):
+        await service.initialize_session(
+            user_id="user-1", session_id="session-planning-timeout", profile=build_profile()
+        )
+
+    assert service.progress_for("session-planning-timeout") == "FAILED"
 
 
 @pytest.mark.asyncio

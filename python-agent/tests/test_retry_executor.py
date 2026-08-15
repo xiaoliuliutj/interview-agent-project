@@ -1,11 +1,11 @@
 import pytest
 import json
 
-from app.core.exceptions import ReliabilityConfigurationError
+from app.common.exceptions import ReliabilityConfigurationError
 
-from app.core.exceptions import AgentDependencyError
-from app.engineering.reliability.policy import RetryPolicy
-from app.engineering.reliability.retry import AsyncRetryExecutor
+from app.common.exceptions import AgentDependencyError
+from app.infrastructure.reliability.policy import RetryPolicy
+from app.infrastructure.reliability.retry import AsyncRetryExecutor
 
 
 def build_executor() -> AsyncRetryExecutor:

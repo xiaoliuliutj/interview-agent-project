@@ -1,7 +1,0 @@
-{
-  "id": "python-backend",
-  "name": "Python 后端",
-  "description": "Python 服务端岗位的结构化面试约束。",
-  "enabled": true,
-  "allowedTools": ["rag.search"]
-}

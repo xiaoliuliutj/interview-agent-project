@@ -4,7 +4,7 @@ import { useEffect, useState, Suspense, lazy } from 'react';
 import { historyApi, type InterviewDetail } from './api/history';
 import type { UploadKnowledgeBaseResponse } from './api/knowledgebase';
 import type { Difficulty } from './components/UnifiedInterviewModal';
-import type { CategoryDTO } from './api/skill';
+import type { CategoryDTO } from './types/interview-config';
 import { Loader2 } from 'lucide-react';
 import { ROUTES } from './constants/routes';
 
@@ -81,7 +81,7 @@ interface InterviewEntryState {
   resumeText?: string;
   sessionIdToResume?: string;
   interviewConfig?: {
-    skillId?: string;
+    interviewDirection?: string;
     difficulty?: Difficulty;
     customCategories?: CategoryDTO[];
     jdText?: string;

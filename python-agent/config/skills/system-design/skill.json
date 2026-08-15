@@ -1,7 +1,0 @@
-{
-  "id": "system-design",
-  "name": "系统设计",
-  "description": "系统设计岗位或场景题环节的结构化面试约束。",
-  "enabled": true,
-  "allowedTools": ["rag.search"]
-}

@@ -7,7 +7,7 @@ import InterviewMessageBubble from '../components/InterviewMessageBubble';
 import InterviewPageHeader from '../components/InterviewPageHeader';
 import type {InterviewQuestion, InterviewSession} from '../types/interview';
 import type {Difficulty} from '../components/UnifiedInterviewModal';
-import type {CategoryDTO} from '../api/skill';
+import type {CategoryDTO} from '../types/interview-config';
 import {historyApi} from '../api/history';
 import {createClientId, getErrorDisplayMessage} from '../api/request';
 
@@ -50,7 +50,7 @@ interface InterviewProps {
   resumeId?: string;
   sessionIdToResume?: string;
   initialConfig?: {
-    skillId?: string;
+    interviewDirection?: string;
     difficulty?: Difficulty;
     customCategories?: CategoryDTO[];
     jdText?: string;
@@ -79,7 +79,7 @@ export default function Interview({
   const startedRef = useRef(false);
   const pendingAnswerSubmissionRef = useRef<PendingAnswerSubmission | null>(null);
 
-  const skillId = initialConfig?.skillId;
+  const interviewDirection = initialConfig?.interviewDirection;
   const difficulty = initialConfig?.difficulty;
   const customCategories = initialConfig?.customCategories ?? [];
   const jdText = initialConfig?.jdText;
@@ -130,7 +130,7 @@ export default function Interview({
         resumeId,
         targetRole,
         interviewDurationMinutes,
-        skillId,
+        interviewDirection,
         difficulty,
         jdText,
         customCategories,

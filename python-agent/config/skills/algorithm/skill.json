@@ -1,7 +1,0 @@
-{
-  "id": "algorithm",
-  "name": "算法与数据结构",
-  "description": "算法岗位或算法环节的结构化面试约束。",
-  "enabled": true,
-  "allowedTools": ["rag.search"]
-}

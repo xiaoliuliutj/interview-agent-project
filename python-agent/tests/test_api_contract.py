@@ -4,10 +4,10 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.agent.rag.models import KnowledgeChunk, RagSearchResult
-from app.agent.evaluation.models import ResumeEvaluation
+from app.rag.models import KnowledgeChunk, RagSearchResult
+from app.agents.evaluation.models import ResumeEvaluation
 from app.api.application import create_app
-from app.core.contracts import SessionStatus
+from app.common.contracts import SessionStatus
 
 REQUEST_TIMESTAMP = "2026-08-09T00:00:00Z"
 

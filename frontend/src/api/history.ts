@@ -36,7 +36,7 @@ export interface InterviewItem {
   candidateId: string;
   resumeId: string;
   jdId: string | null;
-  skillId: string | null;
+  interviewDirection: string | null;
   difficulty: string;
   totalQuestions: number;
   status: 'INITIALIZING' | 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'FAILED';

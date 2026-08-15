@@ -1,0 +1,10 @@
+{
+  "id": "computer-vision",
+  "name": "计算机视觉面试",
+  "description": "围绕图像处理、检测分割、训练评估和部署提问。",
+  "enabled": true,
+  "allowedTools": [
+    "rag.search"
+  ]
+}
+

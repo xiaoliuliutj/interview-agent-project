@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from app.agent.web_reader import WebDocument, crawl_public_site
+from app.tools.web_reader import WebDocument, crawl_public_site
 
 
 def document(url: str, title: str, links: tuple[str, ...] = ()) -> WebDocument:
@@ -27,8 +27,8 @@ async def test_crawl_counts_only_valid_unique_pages(monkeypatch):
         ),
         "https://example.com/duplicate": document("https://example.com/duplicate", "Good"),
     }
-    monkeypatch.setattr("app.agent.web_reader.validate_public_url", lambda url: url)
-    monkeypatch.setattr("app.agent.web_reader.fetch_public_article", lambda url: _resolve(pages[url]))
+    monkeypatch.setattr("app.tools.web_reader.validate_public_url", lambda url: url)
+    monkeypatch.setattr("app.tools.web_reader.fetch_public_article", lambda url: _resolve(pages[url]))
     result = await crawl_public_site("https://example.com/index", topic="technical")
     assert [page.document.title for page in result.pages] == ["Index", "Good"]
     assert len(result.rejected) == 2
@@ -44,8 +44,8 @@ async def test_directory_can_expand_without_counting_as_valid_page(monkeypatch):
         "https://example.com/child": document("https://example.com/child", "Child"),
     }
     assessor = DirectoryAssessor()
-    monkeypatch.setattr("app.agent.web_reader.validate_public_url", lambda url: url)
-    monkeypatch.setattr("app.agent.web_reader.fetch_public_article", lambda url: _resolve(pages[url]))
+    monkeypatch.setattr("app.tools.web_reader.validate_public_url", lambda url: url)
+    monkeypatch.setattr("app.tools.web_reader.fetch_public_article", lambda url: _resolve(pages[url]))
     result = await crawl_public_site("https://example.com/index", assessor=assessor)
     assert [page.document.title for page in result.pages] == ["Child"]
     assert len(result.rejected) == 1
@@ -63,8 +63,8 @@ async def test_agent_cannot_invent_links(monkeypatch):
     async def fetch(url):
         visited.append(url)
         return pages[url]
-    monkeypatch.setattr("app.agent.web_reader.validate_public_url", lambda url: url)
-    monkeypatch.setattr("app.agent.web_reader.fetch_public_article", fetch)
+    monkeypatch.setattr("app.tools.web_reader.validate_public_url", lambda url: url)
+    monkeypatch.setattr("app.tools.web_reader.fetch_public_article", fetch)
 
     await crawl_public_site("https://example.com/index", assessor=InventingAssessor())
 
@@ -74,8 +74,8 @@ async def test_agent_cannot_invent_links(monkeypatch):
 @pytest.mark.asyncio
 async def test_redirected_cross_domain_page_is_not_counted(monkeypatch):
     redirected = document("https://other.example/page", "Redirected")
-    monkeypatch.setattr("app.agent.web_reader.validate_public_url", lambda url: url)
-    monkeypatch.setattr("app.agent.web_reader.fetch_public_article", lambda url: _resolve(redirected))
+    monkeypatch.setattr("app.tools.web_reader.validate_public_url", lambda url: url)
+    monkeypatch.setattr("app.tools.web_reader.fetch_public_article", lambda url: _resolve(redirected))
 
     result = await crawl_public_site("https://example.com/index")
 
@@ -89,8 +89,8 @@ async def test_agent_cannot_include_a_thin_page(monkeypatch):
         url="https://example.com/thin", title="Thin", fetched_at="now", content_hash="thin",
         markdown="# Thin\n\nOnly a short fact.", content_type="text/html", raw_byte_size=30,
     )
-    monkeypatch.setattr("app.agent.web_reader.validate_public_url", lambda url: url)
-    monkeypatch.setattr("app.agent.web_reader.fetch_public_article", lambda url: _resolve(thin))
+    monkeypatch.setattr("app.tools.web_reader.validate_public_url", lambda url: url)
+    monkeypatch.setattr("app.tools.web_reader.fetch_public_article", lambda url: _resolve(thin))
     result = await crawl_public_site("https://example.com/thin", assessor=AlwaysIncludeAssessor())
     assert len(result.pages) == 0
     assert result.rejected[0]["reason"] == "清洗后正文内容不足"
@@ -102,10 +102,10 @@ async def test_crawl_fetch_is_bounded_by_remaining_task_deadline(monkeypatch):
         await asyncio.sleep(10)
 
     ticks = iter((0.0, 0.0, 599.99))
-    monkeypatch.setattr("app.agent.web_reader.validate_public_url", lambda url: url)
-    monkeypatch.setattr("app.agent.web_reader.fetch_public_article", never_finishes)
-    monkeypatch.setattr("app.agent.web_reader.monotonic", lambda: next(ticks, 599.99))
-    monkeypatch.setattr("app.agent.web_reader.CRAWL_TIMEOUT_SECONDS", 600.0)
+    monkeypatch.setattr("app.tools.web_reader.validate_public_url", lambda url: url)
+    monkeypatch.setattr("app.tools.web_reader.fetch_public_article", never_finishes)
+    monkeypatch.setattr("app.tools.web_reader.monotonic", lambda: next(ticks, 599.99))
+    monkeypatch.setattr("app.tools.web_reader.CRAWL_TIMEOUT_SECONDS", 600.0)
     result = await crawl_public_site("https://example.com/index")
     assert result.pages == ()
     assert result.status == "PARTIAL_COMPLETED"
@@ -113,7 +113,7 @@ async def test_crawl_fetch_is_bounded_by_remaining_task_deadline(monkeypatch):
 
 
 def test_article_parser_removes_common_boilerplate() -> None:
-    from app.agent.web_reader import _ArticleParser
+    from app.tools.web_reader import _ArticleParser
     parser = _ArticleParser()
     parser.feed("""
         <html><head><title>Thread pools</title></head><body>

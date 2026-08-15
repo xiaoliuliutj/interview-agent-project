@@ -1,7 +1,0 @@
-{
-  "id": "resume-analyst",
-  "name": "简历评价",
-  "description": "依据简历事实和岗位要求生成可解释评价",
-  "enabled": true,
-  "allowedTools": []
-}
