@@ -3,7 +3,7 @@ package com.interviewguide.interview.service;
 import com.interviewguide.common.exception.BusinessException;
 
 import com.interviewguide.knowledgebase.domain.KnowledgeBaseEntity;
-import com.interviewguide.knowledgebase.mapper.KnowledgeBaseRepository;
+import com.interviewguide.knowledgebase.mapper.KnowledgeBaseMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -15,11 +15,11 @@ import java.util.List;
 public class InterviewKnowledgeBaseSelectionService {
     public record Selection(List<String> systemKnowledgeBaseIds, List<String> userKnowledgeBaseIds) {}
 
-    private final KnowledgeBaseRepository repository;
+    private final KnowledgeBaseMapper repository;
     private final List<String> configuredSystemIds;
 
     public InterviewKnowledgeBaseSelectionService(
-            KnowledgeBaseRepository repository,
+            KnowledgeBaseMapper repository,
             @Value("${agent.system-knowledge-base-ids:}") String configuredSystemIds) {
         this.repository = repository;
         this.configuredSystemIds = Arrays.stream(configuredSystemIds.split(","))

@@ -1,5 +1,6 @@
 package com.interviewguide.resume.service;
 
+import com.interviewguide.utils.file.ResumeFileStorageUtil;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.mock.web.MockMultipartFile;
@@ -12,20 +13,20 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class ResumeFileStorageServiceTest {
+class ResumeFileStorageUtilTest {
 
     @TempDir
     Path storageRoot;
 
     @Test
     void sameContentUsesIndependentPathsForDifferentResumeVersions() throws Exception {
-        ResumeFileStorageService storage = new ResumeFileStorageService(storageRoot.toString());
+        ResumeFileStorageUtil storage = new ResumeFileStorageUtil(storageRoot.toString());
         MockMultipartFile file = new MockMultipartFile(
                 "file", "resume.txt", "text/plain", "Java and Redis".getBytes());
 
-        ResumeFileStorageService.FileDescriptor descriptor = storage.inspect(file);
-        ResumeFileStorageService.StoredFile first = storage.store(descriptor, "resume-1");
-        ResumeFileStorageService.StoredFile second = storage.store(descriptor, "resume-2");
+        ResumeFileStorageUtil.FileDescriptor descriptor = storage.inspect(file);
+        ResumeFileStorageUtil.StoredFile first = storage.store(descriptor, "resume-1");
+        ResumeFileStorageUtil.StoredFile second = storage.store(descriptor, "resume-2");
 
         assertEquals(first.hash(), second.hash());
         assertNotEquals(first.key(), second.key());

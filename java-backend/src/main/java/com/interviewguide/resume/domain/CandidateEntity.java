@@ -1,5 +1,6 @@
 package com.interviewguide.resume.domain;
 
+/** Persistent entity that associates one application user with resume versions. */
 public class CandidateEntity {
     private String id;
     private String userId;

@@ -1,10 +1,10 @@
 package com.interviewguide.common.web;
 
 import com.interviewguide.common.exception.BusinessException;
-import com.interviewguide.common.web.dto.ApiErrorDetail;
-import com.interviewguide.common.web.dto.ApiErrorResponse;
-import com.interviewguide.infrastructure.web.RequestIdFilter;
-import com.interviewguide.pythonagent.exception.PythonAgentException;
+import com.interviewguide.common.web.ApiErrorDetail;
+import com.interviewguide.common.web.ApiErrorResponse;
+import com.interviewguide.common.web.RequestIdFilter;
+import com.interviewguide.common.exception.PythonAgentException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;

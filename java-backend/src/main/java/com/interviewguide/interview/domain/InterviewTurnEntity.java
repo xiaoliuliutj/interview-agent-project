@@ -3,6 +3,7 @@ package com.interviewguide.interview.domain;
 
 import java.time.Instant;
 
+/** Persistent entity representing one generated question and submitted answer. */
 public class InterviewTurnEntity {
     private Long id;
     private String sessionId;

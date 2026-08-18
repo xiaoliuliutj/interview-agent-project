@@ -3,6 +3,7 @@ package com.interviewguide.resume.domain;
 
 import java.time.Instant;
 
+/** Persistent asynchronous task and result entity for one resume analysis attempt. */
 public class ResumeAnalysisEntity {
     private Long id;
     private String resumeId;

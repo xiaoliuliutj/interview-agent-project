@@ -1,6 +1,7 @@
 package com.interviewguide.interview.service;
 
-import com.interviewguide.interview.dto.InterviewTurnView;
+import com.interviewguide.interview.domain.InterviewTurnResponse;
+import com.interviewguide.interview.service.InterviewReportRenderService;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.Assumptions;
@@ -16,17 +17,17 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class InterviewReportPdfServiceTest {
+class InterviewReportRenderServiceTest {
     @Test
     void rendersReadableTranscriptAndEvaluation() throws Exception {
         Path font = requireFont(
                 "C:/Windows/Fonts/simhei.ttf",
                 "C:/Windows/Fonts/NotoSansSC-VF.ttf",
                 "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf");
-        InterviewReportPdfService service = new InterviewReportPdfService(font.toString());
+        InterviewReportRenderService service = new InterviewReportRenderService(font.toString());
         byte[] content = service.render(
                 "session-1", "COMPLETED", 20,
-                List.of(new InterviewTurnView(0, "PROJECT", "Describe a Java project.", "I built one.",
+                List.of(new InterviewTurnResponse(0, "PROJECT", "Describe a Java project.", "I built one.",
                         "Clear explanation with relevant detail.", 86, Instant.now())),
                 Map.of("overallScore", 86, "summary", "Solid performance.",
                         "strengths", List.of("clear communication"),
@@ -51,10 +52,10 @@ class InterviewReportPdfServiceTest {
                 "C:/Windows/Fonts/msyh.ttc",
                 "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
                 "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc");
-        InterviewReportPdfService service = new InterviewReportPdfService(fontCollection.toString());
+        InterviewReportRenderService service = new InterviewReportRenderService(fontCollection.toString());
         byte[] content = service.render(
                 "session-ttc", "COMPLETED", 20,
-                List.of(new InterviewTurnView(0, "FUNDAMENTAL", "Explain a transaction.", "It is atomic.",
+                List.of(new InterviewTurnResponse(0, "FUNDAMENTAL", "Explain a transaction.", "It is atomic.",
                         "Correct answer.", 82, Instant.now())),
                 Map.of("overallScore", 82, "summary", "Good fundamentals."));
 

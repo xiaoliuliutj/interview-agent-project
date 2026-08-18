@@ -2,6 +2,7 @@ package com.interviewguide.resume.domain;
 
 import java.time.Instant;
 
+/** Persistent versioned resume entity with extracted text and stored-file metadata. */
 public class ResumeEntity {
     private String id;
     private String candidateId;

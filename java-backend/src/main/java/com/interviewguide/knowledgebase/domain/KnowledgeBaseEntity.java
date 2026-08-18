@@ -1,8 +1,5 @@
 package com.interviewguide.knowledgebase.domain;
 
-import com.interviewguide.knowledgebase.service.KnowledgeBaseService;
-
-
 import java.time.Instant;
 
 public class KnowledgeBaseEntity {
