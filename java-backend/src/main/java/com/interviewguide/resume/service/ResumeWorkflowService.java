@@ -167,7 +167,7 @@ public class ResumeWorkflowService {
     /** Returns a caller-owned resume with related interviews and analysis history. */
     public Map<String, Object> detail(String id,
             String userId) {
-        ResumeEntity resume = owned(id, userId);
+        ResumeEntity resume = access.owned(id, userId);
         Map<String, Object> result = new HashMap<>();
         result.put("id", resume.getId());
         result.put("filename", resume.getOriginalFilename());
