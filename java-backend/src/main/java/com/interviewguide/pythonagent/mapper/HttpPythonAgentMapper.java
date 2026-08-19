@@ -15,6 +15,7 @@ import com.interviewguide.common.exception.PythonAgentException;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
 import org.springframework.stereotype.Component;
+import org.springframework.context.annotation.Primary;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
@@ -25,6 +26,7 @@ import java.util.stream.Collectors;
 
 /** HTTP adapter only. It contains no Agent, Skill, RAG or memory implementation. */
 @Component
+@Primary
 public class HttpPythonAgentMapper implements PythonAgentMapper {
     private final RestClient restClient;
     private final Validator validator;
